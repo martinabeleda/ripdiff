@@ -89,10 +89,10 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
             let display_path = shorten_path(&f.path, (area.width as usize).saturating_sub(12));
 
             let eye = if hidden { "⊘" } else { " " };
-            let stat_str = format_stats(f.additions, f.deletions);
+            let stat_spans = format_stat_spans(f.additions, f.deletions);
 
             let line = if i == app.selected {
-                Line::from(vec![
+                let mut spans = vec![
                     Span::raw(format!("{eye} ")),
                     Span::styled(
                         f.status.symbol(),
@@ -104,10 +104,11 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
                         Style::default().add_modifier(Modifier::BOLD),
                     ),
                     Span::raw("  "),
-                    Span::styled(stat_str, Style::default().fg(Color::DarkGray)),
-                ])
+                ];
+                spans.extend(stat_spans);
+                Line::from(spans)
             } else {
-                Line::from(vec![
+                let mut spans = vec![
                     Span::raw(format!("{eye} ")),
                     Span::styled(
                         f.status.symbol(),
@@ -116,8 +117,9 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
                     Span::raw(" "),
                     Span::raw(display_path),
                     Span::raw("  "),
-                    Span::styled(stat_str, Style::default().fg(Color::DarkGray)),
-                ])
+                ];
+                spans.extend(stat_spans);
+                Line::from(spans)
             };
 
             ListItem::new(line)
@@ -266,11 +268,16 @@ fn shorten_path(path: &str, max_len: usize) -> String {
     format!("…{}", &path[start..])
 }
 
-fn format_stats(add: u32, del: u32) -> String {
+fn format_stat_spans(add: u32, del: u32) -> Vec<Span<'static>> {
+    let green = Style::default().fg(Color::Green);
+    let red = Style::default().fg(Color::Red);
     match (add, del) {
-        (0, 0) => String::new(),
-        (a, 0) => format!("+{a}"),
-        (0, d) => format!("-{d}"),
-        (a, d) => format!("+{a}-{d}"),
+        (0, 0) => vec![],
+        (a, 0) => vec![Span::styled(format!("+{a}"), green)],
+        (0, d) => vec![Span::styled(format!("-{d}"), red)],
+        (a, d) => vec![
+            Span::styled(format!("+{a}"), green),
+            Span::styled(format!("-{d}"), red),
+        ],
     }
 }
