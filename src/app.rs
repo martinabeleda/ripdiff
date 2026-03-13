@@ -1,6 +1,6 @@
-use crate::diff::{DiffContent, DiffMode, fetch_diff};
+use crate::diff::{fetch_diff, DiffContent, DiffMode};
 use crate::event::Event;
-use crate::git::{FileStat, FileStatus, list_changed_files, repo_root};
+use crate::git::{list_changed_files, repo_root, FileStat, FileStatus};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::CrosstermBackend;
@@ -98,7 +98,13 @@ impl App {
 
         if !self.diff_cache.contains_key(&path) {
             let is_untracked = file.status == FileStatus::Untracked;
-            let result = fetch_diff(&self.repo_root, &path, self.panel_width, &self.diff_mode, is_untracked);
+            let result = fetch_diff(
+                &self.repo_root,
+                &path,
+                self.panel_width,
+                &self.diff_mode,
+                is_untracked,
+            );
             match result {
                 Ok(content) => {
                     self.diff_cache.insert(path.clone(), content);
@@ -107,11 +113,15 @@ impl App {
                     // Insert empty content with error message
                     use ratatui::style::{Color, Style};
                     use ratatui::text::{Line, Span};
-                    let error_line =
-                        Line::from(Span::styled(format!("Error: {e}"), Style::default().fg(Color::Red)));
+                    let error_line = Line::from(Span::styled(
+                        format!("Error: {e}"),
+                        Style::default().fg(Color::Red),
+                    ));
                     self.diff_cache.insert(
                         path.clone(),
-                        DiffContent { lines: vec![error_line] },
+                        DiffContent {
+                            lines: vec![error_line],
+                        },
                     );
                 }
             }
@@ -253,7 +263,9 @@ impl App {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => self.move_down(),
             KeyCode::Char('k') | KeyCode::Up => self.move_up(),
-            KeyCode::Char('l') | KeyCode::Right => { self.focus = Panel::Diff; }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.focus = Panel::Diff;
+            }
             KeyCode::Char('g') => self.jump_top(),
             KeyCode::Char('G') => self.jump_bottom(),
             KeyCode::Char(' ') | KeyCode::Enter => self.toggle_hidden(),
@@ -268,13 +280,19 @@ impl App {
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => self.scroll_down(1),
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => self.scroll_up(1),
             // Back to file list
-            (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => { self.focus = Panel::Files; }
+            (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
+                self.focus = Panel::Files;
+            }
             // Half-page scrolling
             (KeyCode::Char('d'), KeyModifiers::CONTROL) => self.scroll_down(half_page),
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.scroll_up(half_page),
             // Top / bottom of diff
-            (KeyCode::Char('g'), KeyModifiers::NONE) => { self.scroll_offset = 0; }
-            (KeyCode::Char('G'), KeyModifiers::NONE) => { self.scroll_offset = usize::MAX; }
+            (KeyCode::Char('g'), KeyModifiers::NONE) => {
+                self.scroll_offset = 0;
+            }
+            (KeyCode::Char('G'), KeyModifiers::NONE) => {
+                self.scroll_offset = usize::MAX;
+            }
             // Hunk jumping
             (KeyCode::Char(']'), KeyModifiers::NONE) => self.jump_next_hunk(),
             (KeyCode::Char('['), KeyModifiers::NONE) => self.jump_prev_hunk(),
