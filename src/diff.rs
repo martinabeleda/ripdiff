@@ -51,48 +51,24 @@ pub fn fetch_diff(
         return show_new_file(repo_root, file_path);
     }
 
-    // Try difftastic first
-    let difft_result = try_difft(repo_root, file_path, panel_width, mode);
-
-    let output_bytes = match difft_result {
-        Ok(bytes) if !bytes.is_empty() => bytes,
-        _ => {
-            // Fall back to plain git diff
-            plain_git_diff(repo_root, file_path)?
-        }
+    let output_bytes = match mode {
+        // Inline mode uses our own unified-diff highlighter so modified files
+        // get consistent syntax coloring even when difftastic is installed.
+        DiffMode::Inline => plain_git_diff(repo_root, file_path)?,
+        DiffMode::SideBySide => match try_difft(repo_root, file_path, panel_width, mode) {
+            Ok(bytes) if !bytes.is_empty() => bytes,
+            _ => plain_git_diff(repo_root, file_path)?,
+        },
     };
 
     parse_ansi_to_lines(&output_bytes)
 }
 
 fn show_new_file(repo_root: &Path, file_path: &str) -> Result<DiffContent> {
-    use ratatui::style::{Color, Style};
-    use ratatui::text::Span;
-
     let full_path = repo_root.join(file_path);
     let content = std::fs::read_to_string(&full_path).unwrap_or_else(|_| "[binary file]".into());
-
-    let mut lines = vec![
-        Line::from(Span::styled(
-            format!("new file: {file_path}"),
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(ratatui::style::Modifier::BOLD),
-        )),
-        Line::from(""),
-    ];
-
-    for (i, text) in content.lines().enumerate() {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("{:>4} ", i + 1),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(format!("+ {text}"), Style::default().fg(Color::Green)),
-        ]));
-    }
-
-    Ok(DiffContent { lines })
+    let ansi = crate::syntax::highlight_new_file(file_path, &content);
+    parse_ansi_to_lines(ansi.as_bytes())
 }
 
 fn try_difft(
@@ -117,11 +93,19 @@ fn try_difft(
 fn plain_git_diff(repo_root: &Path, file_path: &str) -> Result<Vec<u8>> {
     let output = Command::new("git")
         .current_dir(repo_root)
-        .args(["diff", "HEAD", "--color=always", "--", file_path])
+        .args([
+            "diff",
+            "HEAD",
+            "--no-color",
+            "--no-ext-diff",
+            "--",
+            file_path,
+        ])
         .output()
         .context("Failed to run git diff")?;
 
-    Ok(output.stdout)
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(crate::syntax::highlight_unified_diff(file_path, &text).into_bytes())
 }
 
 fn parse_ansi_to_lines(bytes: &[u8]) -> Result<DiffContent> {

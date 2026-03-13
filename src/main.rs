@@ -2,6 +2,7 @@ mod app;
 mod diff;
 mod event;
 mod git;
+mod syntax;
 mod ui;
 
 use anyhow::Result;

@@ -291,6 +291,21 @@ fn resolve_diff_line_background(line: &Line<'_>, is_cursor_line: bool) -> Color 
 }
 
 fn detect_diff_line_kind(line: &Line<'_>) -> Option<DiffLineKind> {
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    let trimmed = text.trim_start();
+
+    if trimmed.starts_with("+") && !trimmed.starts_with("+++") {
+        return Some(DiffLineKind::Addition);
+    }
+
+    if trimmed.starts_with("-") && !trimmed.starts_with("---") {
+        return Some(DiffLineKind::Deletion);
+    }
+
     let has_green = line
         .spans
         .iter()

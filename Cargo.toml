@@ -16,3 +16,4 @@ notify = "6"
 clap = { version = "4", features = ["derive"] }
 ansi-to-tui = "7"
 anyhow = "1"
+syntect = "5"
