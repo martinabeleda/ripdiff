@@ -12,7 +12,7 @@ path = "src/main.rs"
 ratatui = "0.29"
 crossterm = "0.28"
 tokio = { version = "1", features = ["full"] }
-notify = "6"
+notify = "8"
 clap = { version = "4", features = ["derive"] }
 ansi-to-tui = "7"
 anyhow = "1"
