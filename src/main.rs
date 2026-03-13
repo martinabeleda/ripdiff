@@ -5,11 +5,14 @@ mod git;
 mod ui;
 
 use anyhow::Result;
+use app::App;
 use clap::Parser;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use diff::DiffService;
+use git::git_dir;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
@@ -32,14 +35,18 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
     // Build App before touching the terminal so errors are readable
-    let app = app::App::new(start_path.clone())?;
+    let app = App::new(start_path.clone())?;
 
-    // Watch .git/index and .git/COMMIT_EDITMSG for auto-refresh
-    let git_dir = app.repo_root.join(".git");
-    let watch_paths = vec![git_dir.join("index"), git_dir.join("COMMIT_EDITMSG")];
+    // Watch git index and commit message files for auto-refresh
+    let repo_git_dir = git_dir(&app.repo_root)?;
+    let watch_paths = vec![
+        repo_git_dir.join("index"),
+        repo_git_dir.join("COMMIT_EDITMSG"),
+    ];
 
     let (tx, rx) = mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let diff_service = DiffService::new(app.repo_root.clone(), tx.clone());
 
     let event_task = event::spawn_event_producer(tx.clone(), shutdown_rx.clone());
     let tick_task = event::spawn_tick_producer(tx.clone(), shutdown_rx.clone());
@@ -60,7 +67,7 @@ async fn main() -> Result<()> {
         original_hook(info);
     }));
 
-    let result = app::run(&mut terminal, app, rx).await;
+    let result = app::run(&mut terminal, app, rx, diff_service).await;
 
     let _ = shutdown_tx.send(true);
     let _ = tokio::time::timeout(std::time::Duration::from_millis(300), event_task).await;
