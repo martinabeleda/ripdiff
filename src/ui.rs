@@ -5,8 +5,8 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
-        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
+        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState,
     },
     Frame,
 };
@@ -21,6 +21,9 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     render_title(frame, app, root_chunks[0]);
     render_body(frame, app, root_chunks[1]);
+    if app.ui.show_help {
+        render_help_overlay(frame, area);
+    }
 }
 
 fn render_title(frame: &mut Frame, app: &App, area: Rect) {
@@ -32,6 +35,8 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
 
     let changed = app.files().len();
     let mode_label = app.ui.diff_mode.label();
+    let branch = app.snapshot.branch.as_deref().unwrap_or("detached");
+    let branch_icon = "\u{e0a0}";
 
     let title_text = if let Some(error) = &app.error_message {
         format!("  ripdiff  [{repo_name}]  ERROR: {error}  ")
@@ -41,7 +46,7 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
             Panel::Diff => "diff",
         };
         format!(
-            "  ripdiff  [repo: {repo_name}]  {changed} file{} changed  mode: {mode_label}  panel: {panel_label}  │  Tab/h/l:panel  j/k:nav  gg/G:top/bottom  s/S:stage-toggle  []:hunk  <Space>e:sidebar  t:mode  r:refresh  q:quit",
+            "  ripdiff  [repo: {repo_name}  {branch_icon} {branch}]  {changed} file{} changed  mode: {mode_label}  panel: {panel_label}  │  Tab:panel  t:mode  r:refresh  h:help  q:quit",
             if changed == 1 { "" } else { "s" },
         )
     };
@@ -52,6 +57,80 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
         .add_modifier(Modifier::BOLD);
 
     frame.render_widget(Paragraph::new(title_text).style(style), area);
+}
+
+fn render_help_overlay(frame: &mut Frame, area: Rect) {
+    let lines = vec![
+        Line::from(Span::styled(
+            " Keybindings",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  Tab / Shift-Tab  Switch focused panel"),
+        Line::from("  j / k            Move selection or scroll diff"),
+        Line::from("  gg / G           Jump to top or bottom"),
+        Line::from("  Ctrl-d / Ctrl-u  Scroll half a page in diff"),
+        Line::from("  [ / ]            Jump to previous or next hunk"),
+        Line::from("  s / S            Stage or unstage selected file / all files"),
+        Line::from("  Space e          Hide or show the file sidebar"),
+        Line::from("  Enter            Hide or show the selected file diff"),
+        Line::from("  t                Toggle diff mode"),
+        Line::from("  r                Refresh"),
+        Line::from("  h / ? / Esc      Close this help"),
+        Line::from("  q                Quit"),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Symbols",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  ●  Staged changes only"),
+        Line::from("  ○  Unstaged changes only"),
+        Line::from("  ◐  Mixed staged and unstaged changes"),
+        Line::from("  ⊘  Diff hidden for this file"),
+        Line::from("  M  Modified"),
+        Line::from("  A  Added"),
+        Line::from("  D  Deleted"),
+        Line::from("  R  Renamed"),
+        Line::from("  ?  Untracked or unknown status"),
+        Line::from("  +N Added lines count"),
+        Line::from("  -N Deleted lines count"),
+        Line::from("  \u{e0a0}  Current git branch"),
+    ];
+    let popup_width = lines
+        .iter()
+        .map(display_width_for_line)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(4) as u16;
+    let popup_height = lines.len().saturating_add(2) as u16;
+    let popup = centered_rect(area, popup_width, popup_height);
+    let text = Text::from(lines);
+
+    let block = Block::default()
+        .title(" Help ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(text).block(block), popup);
+}
+
+fn display_width_for_line(line: &Line<'_>) -> usize {
+    line.spans
+        .iter()
+        .map(|span| display_width(span.content.as_ref()))
+        .sum()
+}
+
+fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
+    let popup_width = width.min(area.width.saturating_sub(2)).max(1);
+    let popup_height = height.min(area.height.saturating_sub(2)).max(1);
+    Rect {
+        x: area.x + area.width.saturating_sub(popup_width) / 2,
+        y: area.y + area.height.saturating_sub(popup_height) / 2,
+        width: popup_width,
+        height: popup_height,
+    }
 }
 
 fn render_body(frame: &mut Frame, app: &App, area: Rect) {

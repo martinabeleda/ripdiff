@@ -46,6 +46,7 @@ pub struct FileContentSignature {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RepoSnapshot {
+    pub branch: Option<String>,
     pub files: Vec<FileStat>,
 }
 
@@ -134,6 +135,7 @@ pub fn repo_has_head(repo_root: &Path) -> Result<bool> {
 }
 
 pub fn load_snapshot(repo_root: &Path) -> Result<RepoSnapshot> {
+    let branch = current_branch(repo_root)?;
     let mut files = parse_status_porcelain(repo_root)?;
     let mut stats = parse_numstat(repo_root, true)?;
 
@@ -153,7 +155,7 @@ pub fn load_snapshot(repo_root: &Path) -> Result<RepoSnapshot> {
         file.content_signature = file_content_signature(repo_root.join(&file.path));
     }
 
-    Ok(RepoSnapshot { files })
+    Ok(RepoSnapshot { branch, files })
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -191,6 +193,33 @@ fn run_git_ok(repo: &Path, args: &[&str], context: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn current_branch(repo_root: &Path) -> Result<Option<String>> {
+    let branch = run_git_utf8(repo_root, &["branch", "--show-current"])?;
+    if !branch.is_empty() {
+        return Ok(Some(branch));
+    }
+
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .context("Failed to run git rev-parse --short HEAD")?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let short_head = String::from_utf8(output.stdout)
+        .map(|text| text.trim().to_string())
+        .context("git output not UTF-8")?;
+
+    if short_head.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(format!("detached@{short_head}")))
+    }
 }
 
 fn parse_status_porcelain(repo_root: &Path) -> Result<Vec<FileStat>> {
