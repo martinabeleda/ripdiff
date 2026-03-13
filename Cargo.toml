@@ -14,7 +14,7 @@ crossterm = "0.28"
 tokio = { version = "1", features = ["full"] }
 notify = "6"
 clap = { version = "4", features = ["derive"] }
-ansi-to-tui = "7"
+ansi-to-tui = "8"
 anyhow = "1"
 
 [dev-dependencies]
