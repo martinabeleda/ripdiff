@@ -218,11 +218,12 @@ fn render_diff_panel(frame: &mut Frame, app: &App, area: Rect) {
     let is_diff_focused = app.ui.focus == Panel::Diff;
 
     let visible_lines = if let Some(diff) = app.selected_diff() {
-        style_visible_diff_lines(&diff.lines[scroll..end], is_diff_focused)
+        let cursor = app.ui.diff_cursor.saturating_sub(scroll);
+        style_visible_diff_lines(&diff.lines[scroll..end], is_diff_focused, Some(cursor))
     } else if app.selected_diff_is_loading() {
-        style_visible_diff_lines(&loading_lines, is_diff_focused)
+        style_visible_diff_lines(&loading_lines, is_diff_focused, Some(0))
     } else {
-        style_visible_diff_lines(&loading_lines, is_diff_focused)
+        style_visible_diff_lines(&loading_lines, is_diff_focused, Some(0))
     };
 
     frame.render_widget(
@@ -243,12 +244,17 @@ fn render_diff_panel(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn style_visible_diff_lines(lines: &[Line<'_>], is_diff_focused: bool) -> Vec<Line<'static>> {
+fn style_visible_diff_lines(
+    lines: &[Line<'_>],
+    is_diff_focused: bool,
+    selected_line: Option<usize>,
+) -> Vec<Line<'static>> {
     lines
         .iter()
         .enumerate()
         .map(|(index, line)| {
-            let background = resolve_diff_line_background(line, is_diff_focused && index == 0);
+            let background =
+                resolve_diff_line_background(line, is_diff_focused && selected_line == Some(index));
             let spans = line
                 .spans
                 .iter()
