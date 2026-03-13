@@ -123,12 +123,6 @@ impl App {
         self.diff_store.cache.get(&request)
     }
 
-    pub fn selected_diff_is_loading(&self) -> bool {
-        self.selected_diff_request()
-            .map(|request| self.diff_store.loading.contains(&request))
-            .unwrap_or(false)
-    }
-
     pub fn ensure_selected_diff(&mut self, service: &DiffService) {
         let Some(file) = self.selected_file() else {
             return;
