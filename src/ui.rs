@@ -220,17 +220,15 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let diff_lines = app
-        .get_diff()
-        .map(|d| d.lines.clone())
-        .unwrap_or_else(|| {
-            vec![Line::from(Span::styled(
-                "  loading...",
-                Style::default().fg(Color::DarkGray),
-            ))]
-        });
+    let loading_lines = [Line::from(Span::styled(
+        "  loading...",
+        Style::default().fg(Color::DarkGray),
+    ))];
 
-    let total_lines = diff_lines.len();
+    let total_lines = app
+        .get_diff()
+        .map(|d| d.lines.len())
+        .unwrap_or(loading_lines.len());
     let inner_height = content_area.height as usize;
 
     // Clamp scroll offset
@@ -238,9 +236,17 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     let scroll = app.scroll_offset.min(max_scroll);
     app.scroll_offset = scroll;
 
-    let para = Paragraph::new(Text::from(diff_lines))
-        .block(block)
-        .scroll((scroll as u16, 0));
+    let end = scroll.saturating_add(inner_height).min(total_lines);
+    let is_diff_focused = app.focus == Panel::Diff;
+    let visible_lines = match app.get_diff() {
+        Some(diff) => style_visible_diff_lines(
+            &diff.lines[scroll..end],
+            is_diff_focused,
+        ),
+        None => style_visible_diff_lines(&loading_lines, is_diff_focused),
+    };
+
+    let para = Paragraph::new(Text::from(visible_lines)).block(block);
 
     frame.render_widget(para, content_area);
 
@@ -257,6 +263,70 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
     }
+}
+
+fn style_visible_diff_lines(lines: &[Line<'_>], is_diff_focused: bool) -> Vec<Line<'static>> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let background = resolve_diff_line_background(line, is_diff_focused && index == 0);
+            let spans = line
+                .spans
+                .iter()
+                .map(|span| Span::styled(span.content.to_string(), span.style.bg(background)))
+                .collect::<Vec<_>>();
+            Line::from(spans)
+        })
+        .collect()
+}
+
+fn resolve_diff_line_background(line: &Line<'_>, is_cursor_line: bool) -> Color {
+    match (detect_diff_line_kind(line), is_cursor_line) {
+        (Some(DiffLineKind::Addition), true) => Color::Rgb(22, 48, 30),
+        (Some(DiffLineKind::Deletion), true) => Color::Rgb(52, 24, 24),
+        (Some(DiffLineKind::Addition), false) => Color::Rgb(12, 26, 18),
+        (Some(DiffLineKind::Deletion), false) => Color::Rgb(30, 14, 14),
+        (None, true) => Color::Rgb(34, 39, 49),
+        (None, false) => Color::Reset,
+    }
+}
+
+fn detect_diff_line_kind(line: &Line<'_>) -> Option<DiffLineKind> {
+    let has_green = line.spans.iter().any(|span| is_addition_color(span.style.fg));
+    let has_red = line.spans.iter().any(|span| is_deletion_color(span.style.fg));
+
+    match (has_green, has_red) {
+        (true, false) => Some(DiffLineKind::Addition),
+        (false, true) => Some(DiffLineKind::Deletion),
+        _ => None,
+    }
+}
+
+fn is_addition_color(color: Option<Color>) -> bool {
+    matches!(
+        color,
+        Some(Color::Green)
+            | Some(Color::LightGreen)
+            | Some(Color::Indexed(2))
+            | Some(Color::Indexed(10))
+    )
+}
+
+fn is_deletion_color(color: Option<Color>) -> bool {
+    matches!(
+        color,
+        Some(Color::Red)
+            | Some(Color::LightRed)
+            | Some(Color::Indexed(1))
+            | Some(Color::Indexed(9))
+    )
+}
+
+#[derive(Clone, Copy)]
+enum DiffLineKind {
+    Addition,
+    Deletion,
 }
 
 fn shorten_path(path: &str, max_len: usize) -> String {
