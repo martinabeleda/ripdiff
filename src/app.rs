@@ -35,6 +35,7 @@ pub struct UiState {
     pub scroll_offset: usize,
     pub pending_g: bool,
     pub pending_space: bool,
+    pub show_help: bool,
     pub show_sidebar: bool,
     pub hidden_files: HashSet<String>,
     pub diff_mode: DiffMode,
@@ -62,6 +63,7 @@ impl App {
                 scroll_offset: 0,
                 pending_g: false,
                 pending_space: false,
+                show_help: false,
                 show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
@@ -326,6 +328,20 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        if self.ui.show_help {
+            match (key.code, key.modifiers) {
+                (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Esc, _) => {
+                    self.should_quit = true;
+                }
+                (KeyCode::Char('h'), KeyModifiers::NONE)
+                | (KeyCode::Char('?'), KeyModifiers::SHIFT) => {
+                    self.ui.show_help = false;
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if self.handle_pending_key_sequence(key) {
             return;
         }
@@ -350,6 +366,13 @@ impl App {
             }
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
                 self.toggle_diff_mode();
+                return;
+            }
+            (KeyCode::Char('h'), KeyModifiers::NONE)
+            | (KeyCode::Char('?'), KeyModifiers::SHIFT) => {
+                self.ui.show_help = true;
+                self.ui.pending_g = false;
+                self.ui.pending_space = false;
                 return;
             }
             (KeyCode::Char('s'), KeyModifiers::NONE) => {
@@ -420,7 +443,7 @@ impl App {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => self.move_down(),
             KeyCode::Char('k') | KeyCode::Up => self.move_up(),
-            KeyCode::Char('l') | KeyCode::Right => {
+            KeyCode::Right => {
                 self.ui.focus = Panel::Diff;
             }
             KeyCode::Char('G') => self.jump_bottom(),
@@ -434,7 +457,7 @@ impl App {
         match (key.code, key.modifiers) {
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => self.scroll_down(1),
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => self.scroll_up(1),
-            (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
+            (KeyCode::Left, _) => {
                 if self.ui.show_sidebar {
                     self.ui.focus = Panel::Files;
                 }
@@ -653,6 +676,7 @@ mod tests {
                 scroll_offset: 0,
                 pending_g: false,
                 pending_space: false,
+                show_help: false,
                 show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
@@ -688,6 +712,7 @@ mod tests {
         let mut app = App {
             repo_root: PathBuf::from("."),
             snapshot: RepoSnapshot {
+                branch: None,
                 files: vec![FileStat {
                     path: "src/main.rs".to_string(),
                     additions: 1,
@@ -704,6 +729,7 @@ mod tests {
                 scroll_offset: 0,
                 pending_g: false,
                 pending_space: false,
+                show_help: false,
                 show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
@@ -742,6 +768,7 @@ mod tests {
     #[test]
     fn apply_snapshot_keeps_cache_when_snapshot_is_unchanged() {
         let snapshot = RepoSnapshot {
+            branch: None,
             files: vec![FileStat {
                 path: "src/main.rs".to_string(),
                 additions: 1,
@@ -766,6 +793,7 @@ mod tests {
                 scroll_offset: 0,
                 pending_g: false,
                 pending_space: false,
+                show_help: false,
                 show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
@@ -808,6 +836,7 @@ mod tests {
         let mut app = App {
             repo_root: PathBuf::from("."),
             snapshot: RepoSnapshot {
+                branch: None,
                 files: vec![FileStat {
                     path: "src/main.rs".to_string(),
                     additions: 1,
@@ -824,6 +853,7 @@ mod tests {
                 scroll_offset: 0,
                 pending_g: false,
                 pending_space: false,
+                show_help: false,
                 show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
@@ -870,6 +900,7 @@ mod tests {
         let mut app = App {
             repo_root: PathBuf::from("."),
             snapshot: RepoSnapshot {
+                branch: None,
                 files: vec![FileStat {
                     path: "src/main.rs".to_string(),
                     additions: 1,
@@ -886,6 +917,7 @@ mod tests {
                 scroll_offset: 0,
                 pending_g: false,
                 pending_space: false,
+                show_help: false,
                 show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
@@ -933,6 +965,7 @@ mod tests {
         let mut app = App {
             repo_root: PathBuf::from("."),
             snapshot: RepoSnapshot {
+                branch: None,
                 files: vec![
                     FileStat {
                         path: "a.rs".to_string(),
@@ -969,6 +1002,7 @@ mod tests {
                 scroll_offset: 0,
                 pending_g: false,
                 pending_space: false,
+                show_help: false,
                 show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
@@ -1028,6 +1062,7 @@ mod tests {
         let mut app = App {
             repo_root: PathBuf::from("."),
             snapshot: RepoSnapshot {
+                branch: None,
                 files: vec![FileStat {
                     path: "src/main.rs".to_string(),
                     additions: 1,
@@ -1044,6 +1079,7 @@ mod tests {
                 scroll_offset: 0,
                 pending_g: false,
                 pending_space: false,
+                show_help: false,
                 show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
@@ -1075,10 +1111,49 @@ mod tests {
     }
 
     #[test]
+    fn handle_key_toggles_help_overlay_with_h() {
+        let mut app = App {
+            repo_root: PathBuf::from("."),
+            snapshot: RepoSnapshot {
+                branch: None,
+                files: vec![],
+            },
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_help: false,
+                show_sidebar: true,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::new(),
+                loading: HashSet::new(),
+            },
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        };
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert!(app.ui.show_help);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert!(!app.ui.show_help);
+    }
+
+    #[test]
     fn toggle_all_files_staged_prefers_staging_partial_changes() {
         let app = App {
             repo_root: PathBuf::from("."),
             snapshot: RepoSnapshot {
+                branch: None,
                 files: vec![FileStat {
                     path: "tracked.txt".to_string(),
                     additions: 1,
@@ -1095,6 +1170,7 @@ mod tests {
                 scroll_offset: 0,
                 pending_g: false,
                 pending_space: false,
+                show_help: false,
                 show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
@@ -1128,6 +1204,7 @@ mod tests {
         let app = App {
             repo_root: PathBuf::from("."),
             snapshot: RepoSnapshot {
+                branch: None,
                 files: vec![FileStat {
                     path: "src/main.rs".to_string(),
                     additions: 2,
@@ -1144,6 +1221,7 @@ mod tests {
                 scroll_offset: 0,
                 pending_g: false,
                 pending_space: false,
+                show_help: false,
                 show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,

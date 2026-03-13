@@ -51,6 +51,7 @@ ripdiff --path /some/repo
 | Key | Action |
 |-----|--------|
 | `Tab` / `Shift-Tab` | Toggle focus between panels |
+| `h` / `?` | Open or close help |
 | `t` | Toggle between inline and side-by-side diff |
 | `r` | Force refresh |
 | `q` / `Esc` | Quit |
@@ -61,7 +62,7 @@ ripdiff --path /some/repo
 |-----|--------|
 | `j` / `↓` | Move file selection down |
 | `k` / `↑` | Move file selection up |
-| `l` / `→` | Switch to diff panel |
+| `→` | Switch to diff panel |
 | `gg` / `G` | Jump to top / bottom of file list |
 | `s` / `S` | Toggle selected file staged / toggle all files staged |
 | `Space e` | Hide / show file list sidebar |
@@ -73,7 +74,7 @@ ripdiff --path /some/repo
 |-----|--------|
 | `j` / `↓` | Scroll down one line |
 | `k` / `↑` | Scroll up one line |
-| `h` / `←` | Switch to file list |
+| `←` | Switch to file list |
 | `Ctrl-d` / `Ctrl-u` | Scroll half page down / up |
 | `gg` / `G` | Jump to top / bottom of diff |
 | `s` / `S` | Toggle selected file staged / toggle all files staged |
@@ -96,7 +97,7 @@ Edit a file in another terminal — the diff auto-updates within ~1 second.
 ## Layout
 
 ```
-  ripdiff  [repo: myproject]  3 files changed  mode: inline  panel: files
+  ripdiff  [repo: myproject]   main  3 files changed  mode: inline  panel: files
   M src/main.rs  +5-2 │ src/main.rs
   A src/lib.rs   +3   │
   M README.md    +1-1 │   fn main() {
@@ -105,7 +106,8 @@ Edit a file in another terminal — the diff auto-updates within ~1 second.
                       │   }
 ```
 
-- 25% left: file list with status indicators (M/A/D/R/?) and stats
+- 25% left: file list with status indicators (M/A/D/R/?) and stage markers (`●` staged, `○` unstaged, `◐` mixed)
 - 75% right: diff output with scrollbar
+- `h` opens a help popup with keybinding and symbol descriptions
 - Minimal borders — just a vertical divider between panels
 - Auto-refreshes on `.git/index` changes and every 500ms
