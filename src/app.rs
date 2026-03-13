@@ -582,6 +582,7 @@ mod tests {
                     additions: 1,
                     deletions: 0,
                     status: FileStatus::Modified,
+                    content_signature: None,
                 }],
             },
             ui: UiState {
@@ -630,6 +631,7 @@ mod tests {
                 additions: 1,
                 deletions: 0,
                 status: FileStatus::Modified,
+                content_signature: None,
             }],
         };
         let request = DiffRequest {
@@ -690,6 +692,7 @@ mod tests {
                     additions: 1,
                     deletions: 0,
                     status: FileStatus::Modified,
+                    content_signature: None,
                 }],
             },
             ui: UiState {
@@ -746,6 +749,7 @@ mod tests {
                     additions: 1,
                     deletions: 0,
                     status: FileStatus::Modified,
+                    content_signature: None,
                 }],
             },
             ui: UiState {
@@ -803,6 +807,7 @@ mod tests {
                     additions: 2,
                     deletions: 2,
                     status: FileStatus::Modified,
+                    content_signature: None,
                 }],
             },
             ui: UiState {

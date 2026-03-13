@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileStatus {
@@ -32,6 +33,13 @@ pub struct FileStat {
     pub additions: u32,
     pub deletions: u32,
     pub status: FileStatus,
+    pub content_signature: Option<FileContentSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileContentSignature {
+    pub len: u64,
+    pub modified_unix_nanos: u128,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -78,6 +86,7 @@ pub fn load_snapshot(repo_root: &Path) -> Result<RepoSnapshot> {
         } else if file.status == FileStatus::Untracked {
             file.additions = count_lines(repo_root.join(&file.path));
         }
+        file.content_signature = file_content_signature(repo_root.join(&file.path));
     }
 
     Ok(RepoSnapshot { files })
@@ -154,6 +163,7 @@ fn parse_status_porcelain(repo_root: &Path) -> Result<Vec<FileStat>> {
                         additions: 0,
                         deletions: 0,
                         status: FileStatus::Untracked,
+                        content_signature: None,
                     });
                 }
                 index += 1;
@@ -183,6 +193,7 @@ fn parse_regular_status(record: &str) -> Option<FileStat> {
         additions: 0,
         deletions: 0,
         status,
+        content_signature: None,
     })
 }
 
@@ -199,6 +210,7 @@ fn parse_rename_status(record: &str) -> Option<FileStat> {
         } else {
             status_from_xy(xy)
         },
+        content_signature: None,
     })
 }
 
@@ -297,10 +309,23 @@ fn count_lines(path: PathBuf) -> u32 {
         .unwrap_or(0)
 }
 
+fn file_content_signature(path: PathBuf) -> Option<FileContentSignature> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let modified_unix_nanos = modified.duration_since(UNIX_EPOCH).ok()?.as_nanos();
+
+    Some(FileContentSignature {
+        len: metadata.len(),
+        modified_unix_nanos,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+    use std::thread;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     fn run_git(repo: &Path, args: &[&str]) {
@@ -401,6 +426,29 @@ mod tests {
         assert_eq!(files[0].status, FileStatus::Renamed);
         assert_eq!(files[0].additions, 1);
         assert_eq!(files[0].deletions, 0);
+    }
+
+    #[test]
+    fn snapshot_changes_when_file_content_changes_without_stat_delta() {
+        let temp = init_repo();
+        fs::write(temp.path().join("tracked.txt"), "before\nsame\n")
+            .expect("fixture should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        fs::write(temp.path().join("tracked.txt"), "alpha\nsame\n")
+            .expect("first edit should be written");
+        let first = load_snapshot(temp.path()).expect("snapshot should load");
+
+        thread::sleep(Duration::from_millis(5));
+
+        fs::write(temp.path().join("tracked.txt"), "bravo\nsame\n")
+            .expect("second edit should be written");
+        let second = load_snapshot(temp.path()).expect("snapshot should load");
+
+        assert_ne!(first, second);
+        assert_eq!(first.files[0].additions, second.files[0].additions);
+        assert_eq!(first.files[0].deletions, second.files[0].deletions);
     }
 
     #[test]
