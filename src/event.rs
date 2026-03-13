@@ -1,6 +1,7 @@
 use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 #[derive(Debug)]
 pub enum Event {
@@ -10,34 +11,43 @@ pub enum Event {
     Tick,
 }
 
-pub fn spawn_event_producer(tx: mpsc::UnboundedSender<Event>) {
+pub fn spawn_event_producer(tx: mpsc::UnboundedSender<Event>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             if event::poll(Duration::from_millis(100)).unwrap_or(false) {
                 match event::read() {
                     Ok(CrosstermEvent::Key(key)) => {
-                        let _ = tx.send(Event::Key(key));
+                        if tx.send(Event::Key(key)).is_err() {
+                            break;
+                        }
                     }
                     Ok(CrosstermEvent::Resize(_, _)) => {
-                        let _ = tx.send(Event::Resize);
+                        if tx.send(Event::Resize).is_err() {
+                            break;
+                        }
                     }
                     _ => {}
                 }
             }
         }
-    });
+    })
 }
 
-pub fn spawn_tick_producer(tx: mpsc::UnboundedSender<Event>) {
+pub fn spawn_tick_producer(tx: mpsc::UnboundedSender<Event>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            let _ = tx.send(Event::Tick);
+            if tx.send(Event::Tick).is_err() {
+                break;
+            }
         }
-    });
+    })
 }
 
-pub fn spawn_watcher(tx: mpsc::UnboundedSender<Event>, watch_paths: Vec<std::path::PathBuf>) {
+pub fn spawn_watcher(
+    tx: mpsc::UnboundedSender<Event>,
+    watch_paths: Vec<std::path::PathBuf>,
+) -> JoinHandle<()> {
     use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
     use std::sync::mpsc as std_mpsc;
 
@@ -57,12 +67,14 @@ pub fn spawn_watcher(tx: mpsc::UnboundedSender<Event>, watch_paths: Vec<std::pat
         loop {
             match notify_rx.recv_timeout(Duration::from_millis(200)) {
                 Ok(_) => {
-                    let _ = tx.send(Event::FsChange);
+                    if tx.send(Event::FsChange).is_err() {
+                        break;
+                    }
                 }
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                 Err(_) => break,
             }
             tokio::task::yield_now().await;
         }
-    });
+    })
 }

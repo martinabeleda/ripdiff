@@ -37,9 +37,9 @@ async fn main() -> Result<()> {
 
     let (tx, rx) = mpsc::unbounded_channel();
 
-    event::spawn_event_producer(tx.clone());
-    event::spawn_tick_producer(tx.clone());
-    event::spawn_watcher(tx, watch_paths);
+    let event_task = event::spawn_event_producer(tx.clone());
+    let tick_task = event::spawn_tick_producer(tx.clone());
+    let watcher_task = event::spawn_watcher(tx, watch_paths);
 
     // Terminal setup
     enable_raw_mode()?;
@@ -58,10 +58,20 @@ async fn main() -> Result<()> {
 
     let result = app::run(&mut terminal, app, rx).await;
 
+    event_task.abort();
+    tick_task.abort();
+    watcher_task.abort();
+
     // Cleanup
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
-    result
+    match result {
+        Ok(()) => std::process::exit(0),
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+    }
 }
