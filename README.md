@@ -63,6 +63,7 @@ ripdiff --path /some/repo
 | `k` / `↑` | Move file selection up |
 | `l` / `→` | Switch to diff panel |
 | `gg` / `G` | Jump to top / bottom of file list |
+| `s` / `S` | Toggle selected file staged / toggle all files staged |
 | `Space e` | Hide / show file list sidebar |
 | `Enter` | Toggle diff visibility for selected file |
 
@@ -75,6 +76,7 @@ ripdiff --path /some/repo
 | `h` / `←` | Switch to file list |
 | `Ctrl-d` / `Ctrl-u` | Scroll half page down / up |
 | `gg` / `G` | Jump to top / bottom of diff |
+| `s` / `S` | Toggle selected file staged / toggle all files staged |
 | `]` / `[` | Jump to next / previous hunk |
 | `Space e` | Hide / show file list sidebar |
 | `Enter` | Toggle diff visibility for selected file |

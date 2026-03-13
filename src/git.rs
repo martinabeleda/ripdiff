@@ -33,6 +33,8 @@ pub struct FileStat {
     pub additions: u32,
     pub deletions: u32,
     pub status: FileStatus,
+    pub has_staged_changes: bool,
+    pub has_unstaged_changes: bool,
     pub content_signature: Option<FileContentSignature>,
 }
 
@@ -57,6 +59,68 @@ pub fn git_dir(start: &Path) -> Result<PathBuf> {
     run_git_utf8(start, &["rev-parse", "--absolute-git-dir"])
         .map(PathBuf::from)
         .context("Failed to resolve git directory")
+}
+
+pub fn stage_file(repo_root: &Path, path: &str) -> Result<()> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["add", "--", path])
+        .output()
+        .with_context(|| format!("Failed to run git add -- {path}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("{}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+pub fn stage_all(repo_root: &Path) -> Result<()> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["add", "--all"])
+        .output()
+        .context("Failed to run git add --all")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("{}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+pub fn unstage_file(repo_root: &Path, path: &str) -> Result<()> {
+    if repo_has_head(repo_root)? {
+        run_git_ok(
+            repo_root,
+            &["restore", "--staged", "--", path],
+            &format!("Failed to run git restore --staged -- {path}"),
+        )
+    } else {
+        run_git_ok(
+            repo_root,
+            &["rm", "--cached", "--", path],
+            &format!("Failed to run git rm --cached -- {path}"),
+        )
+    }
+}
+
+pub fn unstage_all(repo_root: &Path) -> Result<()> {
+    if repo_has_head(repo_root)? {
+        run_git_ok(
+            repo_root,
+            &["restore", "--staged", "--", "."],
+            "Failed to run git restore --staged -- .",
+        )
+    } else {
+        run_git_ok(
+            repo_root,
+            &["rm", "-r", "--cached", "--", "."],
+            "Failed to run git rm -r --cached -- .",
+        )
+    }
 }
 
 pub fn repo_has_head(repo_root: &Path) -> Result<bool> {
@@ -114,6 +178,21 @@ fn run_git_utf8(repo: &Path, args: &[&str]) -> Result<String> {
         .context("git output not UTF-8")
 }
 
+fn run_git_ok(repo: &Path, args: &[&str], context: &str) -> Result<()> {
+    let output = Command::new("git")
+        .current_dir(repo)
+        .args(args)
+        .output()
+        .context(context.to_string())?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("{}", stderr.trim());
+    }
+
+    Ok(())
+}
+
 fn parse_status_porcelain(repo_root: &Path) -> Result<Vec<FileStat>> {
     let output = Command::new("git")
         .current_dir(repo_root)
@@ -163,6 +242,8 @@ fn parse_status_porcelain(repo_root: &Path) -> Result<Vec<FileStat>> {
                         additions: 0,
                         deletions: 0,
                         status: FileStatus::Untracked,
+                        has_staged_changes: false,
+                        has_unstaged_changes: true,
                         content_signature: None,
                     });
                 }
@@ -193,6 +274,8 @@ fn parse_regular_status(record: &str) -> Option<FileStat> {
         additions: 0,
         deletions: 0,
         status,
+        has_staged_changes: kind == "u" || has_index_change(xy),
+        has_unstaged_changes: kind == "u" || has_worktree_change(xy),
         content_signature: None,
     })
 }
@@ -210,6 +293,8 @@ fn parse_rename_status(record: &str) -> Option<FileStat> {
         } else {
             status_from_xy(xy)
         },
+        has_staged_changes: has_index_change(xy),
+        has_unstaged_changes: has_worktree_change(xy),
         content_signature: None,
     })
 }
@@ -234,6 +319,24 @@ fn status_from_xy(xy: &str) -> FileStatus {
     } else {
         FileStatus::Unknown
     }
+}
+
+fn has_index_change(xy: &str) -> bool {
+    xy.chars()
+        .next()
+        .map(is_status_change_char)
+        .unwrap_or(false)
+}
+
+fn has_worktree_change(xy: &str) -> bool {
+    xy.chars()
+        .nth(1)
+        .map(is_status_change_char)
+        .unwrap_or(false)
+}
+
+fn is_status_change_char(ch: char) -> bool {
+    !matches!(ch, '.' | ' ')
 }
 
 #[derive(Default)]
@@ -374,6 +477,8 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "new.txt");
         assert_eq!(files[0].status, FileStatus::Renamed);
+        assert!(files[0].has_staged_changes);
+        assert!(files[0].has_unstaged_changes);
     }
 
     #[test]
@@ -391,6 +496,8 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, path);
         assert_eq!(files[0].status, FileStatus::Modified);
+        assert!(!files[0].has_staged_changes);
+        assert!(files[0].has_unstaged_changes);
         assert_eq!(files[0].additions, 1);
     }
 
@@ -405,6 +512,8 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "staged.txt");
         assert_eq!(files[0].status, FileStatus::Added);
+        assert!(files[0].has_staged_changes);
+        assert!(!files[0].has_unstaged_changes);
         assert_eq!(files[0].additions, 1);
     }
 
@@ -424,8 +533,148 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "new name.txt");
         assert_eq!(files[0].status, FileStatus::Renamed);
+        assert!(files[0].has_staged_changes);
+        assert!(files[0].has_unstaged_changes);
         assert_eq!(files[0].additions, 1);
         assert_eq!(files[0].deletions, 0);
+    }
+
+    #[test]
+    fn list_changed_files_marks_mixed_staged_and_unstaged_changes() {
+        let temp = init_repo();
+        fs::write(temp.path().join("tracked.txt"), "before\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        fs::write(temp.path().join("tracked.txt"), "staged\n")
+            .expect("staged edit should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        fs::write(temp.path().join("tracked.txt"), "staged\nunstaged\n")
+            .expect("unstaged edit should be written");
+
+        let files = list_changed_files(temp.path()).expect("changed files should load");
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "tracked.txt");
+        assert!(files[0].has_staged_changes);
+        assert!(files[0].has_unstaged_changes);
+    }
+
+    #[test]
+    fn stage_file_stages_selected_path() {
+        let temp = init_repo();
+        fs::write(temp.path().join("tracked.txt"), "before\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        fs::write(temp.path().join("tracked.txt"), "before\nafter\n")
+            .expect("fixture should update");
+
+        stage_file(temp.path(), "tracked.txt").expect("file should stage");
+
+        let files = list_changed_files(temp.path()).expect("changed files should load");
+        assert_eq!(files.len(), 1);
+        assert!(files[0].has_staged_changes);
+        assert!(!files[0].has_unstaged_changes);
+    }
+
+    #[test]
+    fn stage_all_stages_all_paths() {
+        let temp = init_repo();
+        fs::write(temp.path().join("tracked.txt"), "before\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        fs::write(temp.path().join("tracked.txt"), "before\nafter\n")
+            .expect("tracked update should be written");
+        fs::write(temp.path().join("new.txt"), "hello\n")
+            .expect("untracked file should be written");
+
+        stage_all(temp.path()).expect("all files should stage");
+
+        let files = list_changed_files(temp.path()).expect("changed files should load");
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|file| file.has_staged_changes));
+        assert!(files.iter().all(|file| !file.has_unstaged_changes));
+    }
+
+    #[test]
+    fn unstage_file_restores_selected_path_to_unstaged() {
+        let temp = init_repo();
+        fs::write(temp.path().join("tracked.txt"), "before\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        fs::write(temp.path().join("tracked.txt"), "before\nafter\n")
+            .expect("fixture should update");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+
+        unstage_file(temp.path(), "tracked.txt").expect("file should unstage");
+
+        let files = list_changed_files(temp.path()).expect("changed files should load");
+        assert_eq!(files.len(), 1);
+        assert!(!files[0].has_staged_changes);
+        assert!(files[0].has_unstaged_changes);
+    }
+
+    #[test]
+    fn unstage_all_restores_all_paths_to_unstaged() {
+        let temp = init_repo();
+        fs::write(temp.path().join("tracked.txt"), "before\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        fs::write(temp.path().join("tracked.txt"), "before\nafter\n")
+            .expect("tracked update should be written");
+        fs::write(temp.path().join("new.txt"), "hello\n")
+            .expect("untracked file should be written");
+        run_git(temp.path(), &["add", "--all"]);
+
+        unstage_all(temp.path()).expect("all files should unstage");
+
+        let files = list_changed_files(temp.path()).expect("changed files should load");
+        assert_eq!(files.len(), 2);
+        let tracked = files
+            .iter()
+            .find(|file| file.path == "tracked.txt")
+            .expect("tracked file should remain");
+        let untracked = files
+            .iter()
+            .find(|file| file.path == "new.txt")
+            .expect("new file should remain");
+
+        assert!(!tracked.has_staged_changes);
+        assert!(tracked.has_unstaged_changes);
+        assert!(!untracked.has_staged_changes);
+        assert!(untracked.has_unstaged_changes);
+        assert_eq!(untracked.status, FileStatus::Untracked);
+    }
+
+    #[test]
+    fn stage_file_stages_remaining_changes_for_partially_staged_file() {
+        let temp = init_repo();
+        fs::write(temp.path().join("tracked.txt"), "one\ntwo\n")
+            .expect("fixture should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        fs::write(temp.path().join("tracked.txt"), "ONE\ntwo\nthree\n")
+            .expect("updated content should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        fs::write(temp.path().join("tracked.txt"), "ONE\nTWO\nthree\n")
+            .expect("partial unstaged edit should be written");
+
+        let before = list_changed_files(temp.path()).expect("changed files should load");
+        assert_eq!(before.len(), 1);
+        assert!(before[0].has_staged_changes);
+        assert!(before[0].has_unstaged_changes);
+
+        stage_file(temp.path(), "tracked.txt").expect("remaining changes should stage");
+
+        let after = list_changed_files(temp.path()).expect("changed files should load");
+        assert_eq!(after.len(), 1);
+        assert!(after[0].has_staged_changes);
+        assert!(!after[0].has_unstaged_changes);
     }
 
     #[test]

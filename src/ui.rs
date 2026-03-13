@@ -1,5 +1,5 @@
 use crate::app::{App, Panel};
-use crate::git::FileStatus;
+use crate::git::{FileStat, FileStatus};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -10,6 +10,7 @@ use ratatui::{
     },
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
@@ -40,7 +41,7 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
             Panel::Diff => "diff",
         };
         format!(
-            "  ripdiff  [repo: {repo_name}]  {changed} file{} changed  mode: {mode_label}  panel: {panel_label}  │  Tab/h/l:panel  j/k:nav  gg/G:top/bottom  []:hunk  <Space>e:sidebar  t:mode  r:refresh  q:quit",
+            "  ripdiff  [repo: {repo_name}]  {changed} file{} changed  mode: {mode_label}  panel: {panel_label}  │  Tab/h/l:panel  j/k:nav  gg/G:top/bottom  s/S:stage-toggle  []:hunk  <Space>e:sidebar  t:mode  r:refresh  q:quit",
             if changed == 1 { "" } else { "s" },
         )
     };
@@ -69,6 +70,7 @@ fn render_body(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
+    let content_width = area.width.saturating_sub(1) as usize;
     let items: Vec<ListItem> = app
         .files()
         .iter()
@@ -84,9 +86,18 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
                 FileStatus::Unknown => Color::White,
             };
 
-            let display_path = shorten_path(&file.path, (area.width as usize).saturating_sub(12));
+            let icon = file_stage_icon(file);
+            let icon_text = icon.map(|(symbol, _)| symbol).unwrap_or(" ");
+            let stats_text_len =
+                plain_text_width(&format_stat_spans(file.additions, file.deletions));
+            let reserved_width = 6usize
+                .saturating_add(stats_text_len)
+                .saturating_add(display_width(icon_text));
+            let display_path =
+                shorten_path(&file.path, content_width.saturating_sub(reserved_width));
             let visibility = if hidden { "⊘" } else { " " };
             let stat_spans = format_stat_spans(file.additions, file.deletions);
+            let stage_padding = file_stage_padding(content_width, visibility, &display_path, file);
 
             let mut spans = vec![
                 Span::raw(format!("{visibility} ")),
@@ -105,6 +116,11 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
 
             spans.push(Span::raw("  "));
             spans.extend(stat_spans);
+            spans.push(Span::raw(" ".repeat(stage_padding)));
+
+            if let Some((symbol, color)) = icon {
+                spans.push(Span::styled(symbol, Style::default().fg(color)));
+            }
 
             ListItem::new(Line::from(spans))
         })
@@ -342,5 +358,68 @@ fn format_stat_spans(additions: u32, deletions: u32) -> Vec<Span<'static>> {
             Span::styled(format!("+{additions}"), green),
             Span::styled(format!("-{deletions}"), red),
         ],
+    }
+}
+
+fn file_stage_icon(file: &FileStat) -> Option<(&'static str, Color)> {
+    match (file.has_staged_changes, file.has_unstaged_changes) {
+        (true, true) => Some(("◐", Color::Cyan)),
+        (true, false) => Some(("●", Color::Green)),
+        (false, true) => Some(("○", Color::Yellow)),
+        (false, false) => None,
+    }
+}
+
+fn file_stage_padding(
+    area_width: usize,
+    visibility: &str,
+    display_path: &str,
+    file: &FileStat,
+) -> usize {
+    let base_len = 4usize
+        .saturating_add(display_width(visibility))
+        .saturating_add(display_width(display_path))
+        .saturating_add(plain_text_width(&format_stat_spans(
+            file.additions,
+            file.deletions,
+        )));
+    let icon_len = file_stage_icon(file)
+        .map(|(symbol, _)| display_width(symbol))
+        .unwrap_or(1);
+
+    area_width.saturating_sub(base_len.saturating_add(icon_len).saturating_add(1))
+}
+
+fn plain_text_width(spans: &[Span<'_>]) -> usize {
+    spans
+        .iter()
+        .map(|span| display_width(span.content.as_ref()))
+        .sum()
+}
+
+fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_stage_padding_is_stable_for_hidden_symbol() {
+        let file = FileStat {
+            path: "tracked.txt".to_string(),
+            additions: 3,
+            deletions: 1,
+            status: FileStatus::Modified,
+            has_staged_changes: true,
+            has_unstaged_changes: false,
+            content_signature: None,
+        };
+
+        let visible_padding = file_stage_padding(30, " ", "tracked.txt", &file);
+        let hidden_padding = file_stage_padding(30, "⊘", "tracked.txt", &file);
+
+        assert_eq!(visible_padding, hidden_padding);
     }
 }
