@@ -1,6 +1,9 @@
 use crate::diff::{DiffContent, DiffMode, DiffRequest, DiffService};
 use crate::event::Event;
-use crate::git::{load_snapshot, repo_root, FileStat, FileStatus, RepoSnapshot};
+use crate::git::{
+    load_snapshot, repo_root, stage_all, stage_file, unstage_all, unstage_file, FileStat,
+    FileStatus, RepoSnapshot,
+};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::Backend;
@@ -232,6 +235,42 @@ impl App {
         }
     }
 
+    pub fn toggle_selected_file_staged(&mut self) {
+        let Some(file) = self.selected_file().cloned() else {
+            return;
+        };
+
+        let result = if file.has_unstaged_changes {
+            stage_file(&self.repo_root, &file.path)
+        } else if file.has_staged_changes {
+            unstage_file(&self.repo_root, &file.path)
+        } else {
+            Ok(())
+        };
+
+        match result {
+            Ok(()) => self.force_refresh(),
+            Err(error) => self.error_message = Some(format!("git error: {error}")),
+        }
+    }
+
+    pub fn toggle_all_files_staged(&mut self) {
+        let has_unstaged_changes = self.files().iter().any(|file| file.has_unstaged_changes);
+        let has_staged_changes = self.files().iter().any(|file| file.has_staged_changes);
+        let result = if has_unstaged_changes {
+            stage_all(&self.repo_root)
+        } else if has_staged_changes {
+            unstage_all(&self.repo_root)
+        } else {
+            Ok(())
+        };
+
+        match result {
+            Ok(()) => self.force_refresh(),
+            Err(error) => self.error_message = Some(format!("git error: {error}")),
+        }
+    }
+
     pub fn diff_hunk_offsets(&self) -> Vec<usize> {
         let Some(diff) = self.selected_diff() else {
             return vec![];
@@ -311,6 +350,14 @@ impl App {
             }
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
                 self.toggle_diff_mode();
+                return;
+            }
+            (KeyCode::Char('s'), KeyModifiers::NONE) => {
+                self.toggle_selected_file_staged();
+                return;
+            }
+            (KeyCode::Char('S'), _) => {
+                self.toggle_all_files_staged();
                 return;
             }
             _ => {}
@@ -646,6 +693,8 @@ mod tests {
                     additions: 1,
                     deletions: 0,
                     status: FileStatus::Modified,
+                    has_staged_changes: false,
+                    has_unstaged_changes: true,
                     content_signature: None,
                 }],
             },
@@ -698,6 +747,8 @@ mod tests {
                 additions: 1,
                 deletions: 0,
                 status: FileStatus::Modified,
+                has_staged_changes: false,
+                has_unstaged_changes: true,
                 content_signature: None,
             }],
         };
@@ -762,6 +813,8 @@ mod tests {
                     additions: 1,
                     deletions: 0,
                     status: FileStatus::Modified,
+                    has_staged_changes: false,
+                    has_unstaged_changes: true,
                     content_signature: None,
                 }],
             },
@@ -822,6 +875,8 @@ mod tests {
                     additions: 1,
                     deletions: 0,
                     status: FileStatus::Modified,
+                    has_staged_changes: false,
+                    has_unstaged_changes: true,
                     content_signature: None,
                 }],
             },
@@ -884,6 +939,8 @@ mod tests {
                         additions: 1,
                         deletions: 0,
                         status: FileStatus::Modified,
+                        has_staged_changes: false,
+                        has_unstaged_changes: true,
                         content_signature: None,
                     },
                     FileStat {
@@ -891,6 +948,8 @@ mod tests {
                         additions: 1,
                         deletions: 0,
                         status: FileStatus::Modified,
+                        has_staged_changes: false,
+                        has_unstaged_changes: true,
                         content_signature: None,
                     },
                     FileStat {
@@ -898,6 +957,8 @@ mod tests {
                         additions: 1,
                         deletions: 0,
                         status: FileStatus::Modified,
+                        has_staged_changes: false,
+                        has_unstaged_changes: true,
                         content_signature: None,
                     },
                 ],
@@ -972,6 +1033,8 @@ mod tests {
                     additions: 1,
                     deletions: 0,
                     status: FileStatus::Modified,
+                    has_staged_changes: false,
+                    has_unstaged_changes: true,
                     content_signature: None,
                 }],
             },
@@ -1012,6 +1075,50 @@ mod tests {
     }
 
     #[test]
+    fn toggle_all_files_staged_prefers_staging_partial_changes() {
+        let app = App {
+            repo_root: PathBuf::from("."),
+            snapshot: RepoSnapshot {
+                files: vec![FileStat {
+                    path: "tracked.txt".to_string(),
+                    additions: 1,
+                    deletions: 0,
+                    status: FileStatus::Modified,
+                    has_staged_changes: true,
+                    has_unstaged_changes: true,
+                    content_signature: None,
+                }],
+            },
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_sidebar: true,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::new(),
+                loading: HashSet::new(),
+            },
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        };
+
+        let has_unstaged_changes = app.files().iter().any(|file| file.has_unstaged_changes);
+        let has_staged_changes = app.files().iter().any(|file| file.has_staged_changes);
+
+        assert!(has_unstaged_changes);
+        assert!(has_staged_changes);
+    }
+
+    #[test]
     fn diff_hunk_offsets_fall_back_to_change_blocks_for_difft_output() {
         let request = DiffRequest {
             path: "src/main.rs".to_string(),
@@ -1026,6 +1133,8 @@ mod tests {
                     additions: 2,
                     deletions: 2,
                     status: FileStatus::Modified,
+                    has_staged_changes: false,
+                    has_unstaged_changes: true,
                     content_signature: None,
                 }],
             },
