@@ -220,8 +220,6 @@ fn render_diff_panel(frame: &mut Frame, app: &App, area: Rect) {
     let visible_lines = if let Some(diff) = app.selected_diff() {
         let cursor = app.ui.diff_cursor.saturating_sub(scroll);
         style_visible_diff_lines(&diff.lines[scroll..end], is_diff_focused, Some(cursor))
-    } else if app.selected_diff_is_loading() {
-        style_visible_diff_lines(&loading_lines, is_diff_focused, Some(0))
     } else {
         style_visible_diff_lines(&loading_lines, is_diff_focused, Some(0))
     };
