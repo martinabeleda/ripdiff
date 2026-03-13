@@ -60,8 +60,7 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
-    let popup = centered_rect(area, 72, 22);
-    let text = Text::from(vec![
+    let lines = vec![
         Line::from(Span::styled(
             " Keybindings",
             Style::default().add_modifier(Modifier::BOLD),
@@ -92,7 +91,19 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  D  Deleted"),
         Line::from("  R  Renamed"),
         Line::from("  ?  Untracked or unknown status"),
-    ]);
+        Line::from("  +N Added lines count"),
+        Line::from("  -N Deleted lines count"),
+        Line::from("  \u{e0a0}  Current git branch"),
+    ];
+    let popup_width = lines
+        .iter()
+        .map(display_width_for_line)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(4) as u16;
+    let popup_height = lines.len().saturating_add(2) as u16;
+    let popup = centered_rect(area, popup_width, popup_height);
+    let text = Text::from(lines);
 
     let block = Block::default()
         .title(" Help ")
@@ -102,6 +113,13 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
 
     frame.render_widget(Clear, popup);
     frame.render_widget(Paragraph::new(text).block(block), popup);
+}
+
+fn display_width_for_line(line: &Line<'_>) -> usize {
+    line.spans
+        .iter()
+        .map(|span| display_width(span.content.as_ref()))
+        .sum()
 }
 
 fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
