@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::UNIX_EPOCH;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileStatus {
     Modified,
     Added,
@@ -25,132 +27,450 @@ impl FileStatus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileStat {
     pub path: String,
     pub additions: u32,
     pub deletions: u32,
     pub status: FileStatus,
+    pub content_signature: Option<FileContentSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileContentSignature {
+    pub len: u64,
+    pub modified_unix_nanos: u128,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepoSnapshot {
+    pub files: Vec<FileStat>,
 }
 
 pub fn repo_root(start: &Path) -> Result<PathBuf> {
-    let output = Command::new("git")
-        .args([
-            "-C",
-            start.to_str().unwrap_or("."),
-            "rev-parse",
-            "--show-toplevel",
-        ])
-        .output()
-        .context("Failed to run git rev-parse")?;
-
-    if !output.status.success() {
-        anyhow::bail!("Not inside a git repository");
-    }
-
-    let path = String::from_utf8(output.stdout)
-        .context("git output not UTF-8")?
-        .trim()
-        .to_string();
-
-    Ok(PathBuf::from(path))
+    run_git_utf8(start, &["rev-parse", "--show-toplevel"])
+        .map(PathBuf::from)
+        .context("Failed to resolve repository root")
 }
 
-pub fn list_changed_files(repo_root: &Path) -> Result<Vec<FileStat>> {
-    // Get numstat for additions/deletions
-    let numstat = Command::new("git")
-        .args([
-            "-C",
-            repo_root.to_str().unwrap_or("."),
-            "diff",
-            "HEAD",
-            "--numstat",
-        ])
+pub fn git_dir(start: &Path) -> Result<PathBuf> {
+    run_git_utf8(start, &["rev-parse", "--absolute-git-dir"])
+        .map(PathBuf::from)
+        .context("Failed to resolve git directory")
+}
+
+pub fn repo_has_head(repo_root: &Path) -> Result<bool> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["rev-parse", "--verify", "HEAD"])
         .output()
-        .context("Failed to run git diff --numstat")?;
+        .context("Failed to run git rev-parse --verify HEAD")?;
 
-    // Also get unstaged changes not in HEAD (new untracked won't show, but staged+unstaged will)
-    let name_status = Command::new("git")
-        .args([
-            "-C",
-            repo_root.to_str().unwrap_or("."),
-            "diff",
-            "HEAD",
-            "--name-status",
-        ])
-        .output()
-        .context("Failed to run git diff --name-status")?;
+    Ok(output.status.success())
+}
 
-    let numstat_str = String::from_utf8_lossy(&numstat.stdout);
-    let name_status_str = String::from_utf8_lossy(&name_status.stdout);
+pub fn load_snapshot(repo_root: &Path) -> Result<RepoSnapshot> {
+    let mut files = parse_status_porcelain(repo_root)?;
+    let mut stats = parse_numstat(repo_root, true)?;
 
-    // Build status map
-    let mut status_map: std::collections::HashMap<String, FileStatus> =
-        std::collections::HashMap::new();
-    for line in name_status_str.lines() {
-        let parts: Vec<&str> = line.splitn(2, '\t').collect();
-        if parts.len() < 2 {
-            continue;
-        }
-        let code = parts[0].trim();
-        let path = parts[1].trim().to_string();
-        let status = match code.chars().next() {
-            Some('M') => FileStatus::Modified,
-            Some('A') => FileStatus::Added,
-            Some('D') => FileStatus::Deleted,
-            Some('R') => FileStatus::Renamed,
-            _ => FileStatus::Unknown,
-        };
-        status_map.insert(path, status);
+    for (path, diff_stat) in parse_numstat(repo_root, false)? {
+        let entry = stats.entry(path).or_default();
+        entry.additions = entry.additions.saturating_add(diff_stat.additions);
+        entry.deletions = entry.deletions.saturating_add(diff_stat.deletions);
     }
+
+    for file in &mut files {
+        if let Some(diff_stat) = stats.remove(&file.path) {
+            file.additions = diff_stat.additions;
+            file.deletions = diff_stat.deletions;
+        } else if file.status == FileStatus::Untracked {
+            file.additions = count_lines(repo_root.join(&file.path));
+        }
+        file.content_signature = file_content_signature(repo_root.join(&file.path));
+    }
+
+    Ok(RepoSnapshot { files })
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn list_changed_files(repo_root: &Path) -> Result<Vec<FileStat>> {
+    Ok(load_snapshot(repo_root)?.files)
+}
+
+fn run_git_utf8(repo: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .current_dir(repo)
+        .args(args)
+        .output()
+        .with_context(|| format!("Failed to run git {}", args.join(" ")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("{}", stderr.trim());
+    }
+
+    String::from_utf8(output.stdout)
+        .map(|text| text.trim().to_string())
+        .context("git output not UTF-8")
+}
+
+fn parse_status_porcelain(repo_root: &Path) -> Result<Vec<FileStat>> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args([
+            "status",
+            "--porcelain=v2",
+            "--find-renames",
+            "--untracked-files=all",
+            "-z",
+        ])
+        .output()
+        .context("Failed to run git status --porcelain=v2")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("{}", stderr.trim());
+    }
+
+    let records = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .collect::<Vec<_>>();
 
     let mut files = Vec::new();
+    let mut index = 0;
 
-    for line in numstat_str.lines() {
-        let parts: Vec<&str> = line.splitn(3, '\t').collect();
-        if parts.len() < 3 {
-            continue;
+    while index < records.len() {
+        let record = std::str::from_utf8(records[index]).context("git status output not UTF-8")?;
+        match record.chars().next() {
+            Some('1') | Some('u') => {
+                if let Some(file) = parse_regular_status(record) {
+                    files.push(file);
+                }
+                index += 1;
+            }
+            Some('2') => {
+                if let Some(file) = parse_rename_status(record) {
+                    files.push(file);
+                }
+                index += 2;
+            }
+            Some('?') => {
+                if let Some(path) = record.strip_prefix("? ") {
+                    files.push(FileStat {
+                        path: path.to_string(),
+                        additions: 0,
+                        deletions: 0,
+                        status: FileStatus::Untracked,
+                        content_signature: None,
+                    });
+                }
+                index += 1;
+            }
+            Some('!') => index += 1,
+            _ => index += 1,
         }
-        // Binary files show "-" for additions/deletions
-        let additions = parts[0].trim().parse::<u32>().unwrap_or(0);
-        let deletions = parts[1].trim().parse::<u32>().unwrap_or(0);
-        let path = parts[2].trim().to_string();
-        let status = status_map.remove(&path).unwrap_or(FileStatus::Unknown);
-
-        files.push(FileStat {
-            path,
-            additions,
-            deletions,
-            status,
-        });
-    }
-
-    // Also include untracked files
-    let untracked = Command::new("git")
-        .current_dir(repo_root)
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .output()
-        .context("Failed to run git ls-files")?;
-
-    let untracked_str = String::from_utf8_lossy(&untracked.stdout);
-    for line in untracked_str.lines() {
-        let path = line.trim().to_string();
-        if path.is_empty() {
-            continue;
-        }
-        // Count lines in the file for additions stat
-        let full_path = repo_root.join(&path);
-        let additions = std::fs::read_to_string(&full_path)
-            .map(|c| c.lines().count() as u32)
-            .unwrap_or(0);
-
-        files.push(FileStat {
-            path,
-            additions,
-            deletions: 0,
-            status: FileStatus::Untracked,
-        });
     }
 
     Ok(files)
+}
+
+fn parse_regular_status(record: &str) -> Option<FileStat> {
+    let mut parts = record.splitn(3, ' ');
+    let kind = parts.next()?;
+    let xy = parts.next()?;
+    let field_count = if kind == "u" { 11 } else { 9 };
+    let path = nth_space_field(record, field_count)?.to_string();
+    let status = if kind == "u" {
+        FileStatus::Modified
+    } else {
+        status_from_xy(xy)
+    };
+
+    Some(FileStat {
+        path,
+        additions: 0,
+        deletions: 0,
+        status,
+        content_signature: None,
+    })
+}
+
+fn parse_rename_status(record: &str) -> Option<FileStat> {
+    let xy = record.split(' ').nth(1)?;
+    let path = nth_space_field(record, 10)?.to_string();
+
+    Some(FileStat {
+        path,
+        additions: 0,
+        deletions: 0,
+        status: if matches!(status_from_xy(xy), FileStatus::Unknown) {
+            FileStatus::Renamed
+        } else {
+            status_from_xy(xy)
+        },
+        content_signature: None,
+    })
+}
+
+fn nth_space_field(record: &str, field_index: usize) -> Option<&str> {
+    record.splitn(field_index, ' ').nth(field_index - 1)
+}
+
+fn status_from_xy(xy: &str) -> FileStatus {
+    let chars = xy.chars().collect::<Vec<_>>();
+    let x = chars.first().copied().unwrap_or('.');
+    let y = chars.get(1).copied().unwrap_or('.');
+
+    if matches!(x, 'R') || matches!(y, 'R') {
+        FileStatus::Renamed
+    } else if matches!(x, 'A') || matches!(y, 'A') {
+        FileStatus::Added
+    } else if matches!(x, 'D') || matches!(y, 'D') {
+        FileStatus::Deleted
+    } else if matches!(x, 'M' | 'T' | 'U') || matches!(y, 'M' | 'T' | 'U') {
+        FileStatus::Modified
+    } else {
+        FileStatus::Unknown
+    }
+}
+
+#[derive(Default)]
+struct DiffStat {
+    additions: u32,
+    deletions: u32,
+}
+
+fn parse_numstat(repo_root: &Path, staged: bool) -> Result<HashMap<String, DiffStat>> {
+    let mut command = Command::new("git");
+    command.current_dir(repo_root);
+    command.arg("diff");
+    if staged {
+        command.arg("--cached");
+    }
+    command.args(["--numstat", "-z"]);
+
+    let output = command
+        .output()
+        .context("Failed to run git diff --numstat")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("{}", stderr.trim());
+    }
+
+    let records = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .collect::<Vec<_>>();
+
+    let mut stats = HashMap::new();
+    let mut index = 0;
+    while index < records.len() {
+        let text = std::str::from_utf8(records[index]).context("git numstat output not UTF-8")?;
+        let Some((additions, rest)) = text.split_once('\t') else {
+            index += 1;
+            continue;
+        };
+        let Some((deletions, path)) = rest.split_once('\t') else {
+            index += 1;
+            continue;
+        };
+
+        let path = if path.is_empty() {
+            let Some(new_path_record) = records.get(index + 2) else {
+                index += 1;
+                continue;
+            };
+            index += 3;
+            std::str::from_utf8(new_path_record).context("git numstat output not UTF-8")?
+        } else {
+            index += 1;
+            path
+        };
+
+        stats.insert(
+            path.to_string(),
+            DiffStat {
+                additions: additions.parse::<u32>().unwrap_or(0),
+                deletions: deletions.parse::<u32>().unwrap_or(0),
+            },
+        );
+    }
+
+    Ok(stats)
+}
+
+fn count_lines(path: PathBuf) -> u32 {
+    std::fs::read_to_string(path)
+        .map(|content| content.lines().count() as u32)
+        .unwrap_or(0)
+}
+
+fn file_content_signature(path: PathBuf) -> Option<FileContentSignature> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let modified_unix_nanos = modified.duration_since(UNIX_EPOCH).ok()?.as_nanos();
+
+    Some(FileContentSignature {
+        len: metadata.len(),
+        modified_unix_nanos,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::thread;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    fn run_git(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(repo)
+            .args(args)
+            .status()
+            .expect("git command should start");
+        assert!(status.success(), "git command failed: git {:?}", args);
+    }
+
+    fn run_git_with_identity(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(repo)
+            .args([
+                "-c",
+                "user.name=Test User",
+                "-c",
+                "user.email=test@example.com",
+            ])
+            .args(args)
+            .status()
+            .expect("git command should start");
+        assert!(status.success(), "git command failed: git {:?}", args);
+    }
+
+    fn init_repo() -> TempDir {
+        let temp = TempDir::new().expect("temp dir should be created");
+        run_git(temp.path(), &["init", "-q"]);
+        temp
+    }
+
+    #[test]
+    fn list_changed_files_uses_new_path_for_renames() {
+        let temp = init_repo();
+        fs::write(temp.path().join("old.txt"), "before\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", "old.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        run_git(temp.path(), &["mv", "old.txt", "new.txt"]);
+        fs::write(temp.path().join("new.txt"), "before\nafter\n")
+            .expect("rename target should update");
+
+        let files = list_changed_files(temp.path()).expect("changed files should load");
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "new.txt");
+        assert_eq!(files[0].status, FileStatus::Renamed);
+    }
+
+    #[test]
+    fn list_changed_files_preserves_spaces_in_tracked_paths() {
+        let temp = init_repo();
+        let path = "two words.txt";
+        fs::write(temp.path().join(path), "before\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", path]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        fs::write(temp.path().join(path), "before\nafter\n").expect("fixture should update");
+
+        let files = list_changed_files(temp.path()).expect("changed files should load");
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, path);
+        assert_eq!(files[0].status, FileStatus::Modified);
+        assert_eq!(files[0].additions, 1);
+    }
+
+    #[test]
+    fn list_changed_files_includes_staged_files_in_unborn_repo() {
+        let temp = init_repo();
+        fs::write(temp.path().join("staged.txt"), "hello\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", "staged.txt"]);
+
+        let files = list_changed_files(temp.path()).expect("changed files should load");
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "staged.txt");
+        assert_eq!(files[0].status, FileStatus::Added);
+        assert_eq!(files[0].additions, 1);
+    }
+
+    #[test]
+    fn list_changed_files_tracks_stats_for_renamed_files() {
+        let temp = init_repo();
+        fs::write(temp.path().join("old.txt"), "before\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", "old.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        run_git(temp.path(), &["mv", "old.txt", "new name.txt"]);
+        fs::write(temp.path().join("new name.txt"), "before\nafter\n")
+            .expect("rename target should update");
+
+        let files = list_changed_files(temp.path()).expect("changed files should load");
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "new name.txt");
+        assert_eq!(files[0].status, FileStatus::Renamed);
+        assert_eq!(files[0].additions, 1);
+        assert_eq!(files[0].deletions, 0);
+    }
+
+    #[test]
+    fn snapshot_changes_when_file_content_changes_without_stat_delta() {
+        let temp = init_repo();
+        fs::write(temp.path().join("tracked.txt"), "before\nsame\n")
+            .expect("fixture should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        fs::write(temp.path().join("tracked.txt"), "alpha\nsame\n")
+            .expect("first edit should be written");
+        let first = load_snapshot(temp.path()).expect("snapshot should load");
+
+        thread::sleep(Duration::from_millis(5));
+
+        fs::write(temp.path().join("tracked.txt"), "bravo\nsame\n")
+            .expect("second edit should be written");
+        let second = load_snapshot(temp.path()).expect("snapshot should load");
+
+        assert_ne!(first, second);
+        assert_eq!(first.files[0].additions, second.files[0].additions);
+        assert_eq!(first.files[0].deletions, second.files[0].deletions);
+    }
+
+    #[test]
+    fn git_dir_resolves_linked_worktree_gitdir() {
+        let temp = init_repo();
+        fs::create_dir(temp.path().join("nested")).expect("nested dir should exist");
+        let worktree_path = temp.path().join("nested").join("wt");
+
+        run_git_with_identity(temp.path(), &["commit", "--allow-empty", "-qm", "init"]);
+        run_git(
+            temp.path(),
+            &[
+                "worktree",
+                "add",
+                worktree_path.to_str().expect("utf-8 path"),
+                "-q",
+            ],
+        );
+
+        let resolved = git_dir(&worktree_path).expect("git dir should resolve");
+
+        assert!(resolved.is_dir(), "expected git dir to be a directory");
+        assert_ne!(resolved, worktree_path.join(".git"));
+    }
 }

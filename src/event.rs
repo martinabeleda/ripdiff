@@ -1,3 +1,4 @@
+use crate::diff::{DiffContent, DiffRequest};
 use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -10,33 +11,34 @@ pub enum Event {
     Resize,
     FsChange,
     Tick,
+    DiffLoaded {
+        request: DiffRequest,
+        result: Result<DiffContent, String>,
+    },
 }
 
 pub fn spawn_event_producer(
     tx: mpsc::UnboundedSender<Event>,
     shutdown: watch::Receiver<bool>,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let shutdown = shutdown;
-        loop {
-            if *shutdown.borrow() {
-                break;
-            }
+    tokio::task::spawn_blocking(move || loop {
+        if *shutdown.borrow() {
+            break;
+        }
 
-            if event::poll(Duration::from_millis(100)).unwrap_or(false) {
-                match event::read() {
-                    Ok(CrosstermEvent::Key(key)) => {
-                        if tx.send(Event::Key(key)).is_err() {
-                            break;
-                        }
+        if event::poll(Duration::from_millis(100)).unwrap_or(false) {
+            match event::read() {
+                Ok(CrosstermEvent::Key(key)) => {
+                    if tx.send(Event::Key(key)).is_err() {
+                        break;
                     }
-                    Ok(CrosstermEvent::Resize(_, _)) => {
-                        if tx.send(Event::Resize).is_err() {
-                            break;
-                        }
-                    }
-                    _ => {}
                 }
+                Ok(CrosstermEvent::Resize(_, _)) => {
+                    if tx.send(Event::Resize).is_err() {
+                        break;
+                    }
+                }
+                _ => {}
             }
         }
     })
@@ -73,13 +75,11 @@ pub fn spawn_watcher(
     use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
     use std::sync::mpsc as std_mpsc;
 
-    tokio::spawn(async move {
-        let shutdown = shutdown;
+    tokio::task::spawn_blocking(move || {
         let (notify_tx, notify_rx) = std_mpsc::channel();
-        let mut watcher =
-            RecommendedWatcher::new(notify_tx, Config::default()).unwrap_or_else(|e| {
-                panic!("Failed to create watcher: {e}");
-            });
+        let Ok(mut watcher) = RecommendedWatcher::new(notify_tx, Config::default()) else {
+            return;
+        };
 
         for path in &watch_paths {
             if path.exists() {
@@ -101,7 +101,6 @@ pub fn spawn_watcher(
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                 Err(_) => break,
             }
-            tokio::task::yield_now().await;
         }
     })
 }

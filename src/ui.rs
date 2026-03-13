@@ -11,10 +11,8 @@ use ratatui::{
     Frame,
 };
 
-pub fn render(frame: &mut Frame, app: &mut App) {
+pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
-
-    // Title bar (1 line) + main area
     let root_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
@@ -28,26 +26,22 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
     let repo_name = app
         .repo_root
         .file_name()
-        .and_then(|n| n.to_str())
+        .and_then(|name| name.to_str())
         .unwrap_or("?");
 
-    let changed = app.files.len();
-    let mode_label = app.diff_mode.label();
+    let changed = app.files().len();
+    let mode_label = app.ui.diff_mode.label();
 
-    let title_text = if let Some(err) = &app.error_message {
-        format!("  ripdiff  [{}]  ERROR: {}  ", repo_name, err)
+    let title_text = if let Some(error) = &app.error_message {
+        format!("  ripdiff  [{repo_name}]  ERROR: {error}  ")
     } else {
-        let panel_label = match app.focus {
+        let panel_label = match app.ui.focus {
             Panel::Files => "files",
             Panel::Diff => "diff",
         };
         format!(
-            "  ripdiff  [repo: {}]  {} file{} changed  mode: {}  panel: {}  │  Tab/h/l:panel  j/k:nav  []:hunk  t:mode  r:refresh  q:quit",
-            repo_name,
-            changed,
+            "  ripdiff  [repo: {repo_name}]  {changed} file{} changed  mode: {mode_label}  panel: {panel_label}  │  Tab/h/l:panel  j/k:nav  []:hunk  t:mode  r:refresh  q:quit",
             if changed == 1 { "" } else { "s" },
-            mode_label,
-            panel_label,
         )
     };
 
@@ -59,7 +53,7 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(title_text).style(style), area);
 }
 
-fn render_body(frame: &mut Frame, app: &mut App, area: Rect) {
+fn render_body(frame: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
@@ -71,12 +65,12 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
     let items: Vec<ListItem> = app
-        .files
+        .files()
         .iter()
         .enumerate()
-        .map(|(i, f)| {
-            let hidden = app.hidden_files.contains(&f.path);
-            let status_color = match f.status {
+        .map(|(index, file)| {
+            let hidden = app.ui.hidden_files.contains(&file.path);
+            let status_color = match file.status {
                 FileStatus::Added => Color::Green,
                 FileStatus::Deleted => Color::Red,
                 FileStatus::Modified => Color::Yellow,
@@ -85,52 +79,43 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
                 FileStatus::Unknown => Color::White,
             };
 
-            // Shorten path for display
-            let display_path = shorten_path(&f.path, (area.width as usize).saturating_sub(12));
+            let display_path = shorten_path(&file.path, (area.width as usize).saturating_sub(12));
+            let visibility = if hidden { "⊘" } else { " " };
+            let stat_spans = format_stat_spans(file.additions, file.deletions);
 
-            let eye = if hidden { "⊘" } else { " " };
-            let stat_spans = format_stat_spans(f.additions, f.deletions);
+            let mut spans = vec![
+                Span::raw(format!("{visibility} ")),
+                Span::styled(file.status.symbol(), Style::default().fg(status_color)),
+                Span::raw(" "),
+            ];
 
-            let line = if i == app.selected {
-                let mut spans = vec![
-                    Span::raw(format!("{eye} ")),
-                    Span::styled(f.status.symbol(), Style::default().fg(status_color)),
-                    Span::raw(" "),
-                    Span::styled(display_path, Style::default().add_modifier(Modifier::BOLD)),
-                    Span::raw("  "),
-                ];
-                spans.extend(stat_spans);
-                Line::from(spans)
+            if index == app.ui.selected {
+                spans.push(Span::styled(
+                    display_path,
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
             } else {
-                let mut spans = vec![
-                    Span::raw(format!("{eye} ")),
-                    Span::styled(f.status.symbol(), Style::default().fg(status_color)),
-                    Span::raw(" "),
-                    Span::raw(display_path),
-                    Span::raw("  "),
-                ];
-                spans.extend(stat_spans);
-                Line::from(spans)
-            };
+                spans.push(Span::raw(display_path));
+            }
 
-            ListItem::new(line)
+            spans.push(Span::raw("  "));
+            spans.extend(stat_spans);
+
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
-    let no_changes = items.is_empty();
-
-    let border_color = if app.focus == Panel::Files {
+    let border_color = if app.ui.focus == Panel::Files {
         Color::Cyan
     } else {
         Color::DarkGray
     };
-    // Only draw right border as a vertical divider between panels
     let block = Block::default()
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(border_color));
 
-    if no_changes {
-        let msg = Paragraph::new(Text::from(vec![
+    if items.is_empty() {
+        let message = Paragraph::new(Text::from(vec![
             Line::from(""),
             Line::from(Span::styled(
                 "  no changes",
@@ -138,7 +123,7 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
             )),
         ]))
         .block(block);
-        frame.render_widget(msg, area);
+        frame.render_widget(message, area);
         return;
     }
 
@@ -149,21 +134,18 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     let mut state = ListState::default();
-    state.select(Some(app.selected));
-
+    state.select(Some(app.ui.selected));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
+fn render_diff_panel(frame: &mut Frame, app: &App, area: Rect) {
     let file_path = app
         .selected_file()
-        .map(|f| f.path.clone())
+        .map(|file| file.path.clone())
         .unwrap_or_default();
+    let is_hidden = app.ui.hidden_files.contains(&file_path);
 
-    let is_hidden = app.hidden_files.contains(&file_path);
-
-    // File name header line at top of diff panel
-    let header_color = if app.focus == Panel::Diff {
+    let header_color = if app.ui.focus == Panel::Diff {
         Color::Cyan
     } else {
         Color::DarkGray
@@ -174,13 +156,11 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         file_path.clone()
     };
 
-    // Split area into header (1 line) + diff content
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(area);
 
-    // Render file name header
     frame.render_widget(
         Paragraph::new(Span::styled(
             format!(" {header}"),
@@ -192,12 +172,10 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 
     let content_area = chunks[1];
-
-    // No border block for diff content
     let block = Block::default();
 
-    if app.files.is_empty() {
-        let msg = Paragraph::new(Text::from(vec![
+    if app.files().is_empty() {
+        let message = Paragraph::new(Text::from(vec![
             Line::from(""),
             Line::from(Span::styled(
                 "  No changes detected. Working tree is clean.",
@@ -205,20 +183,20 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             )),
         ]))
         .block(block);
-        frame.render_widget(msg, content_area);
+        frame.render_widget(message, content_area);
         return;
     }
 
     if is_hidden {
-        let msg = Paragraph::new(Text::from(vec![
+        let message = Paragraph::new(Text::from(vec![
             Line::from(""),
             Line::from(Span::styled(
-                "  [hidden — press Space to show]",
+                "  [hidden - press Space to show]",
                 Style::default().fg(Color::DarkGray),
             )),
         ]))
         .block(block);
-        frame.render_widget(msg, content_area);
+        frame.render_widget(message, content_area);
         return;
     }
 
@@ -228,28 +206,31 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     ))];
 
     let total_lines = app
-        .get_diff()
-        .map(|d| d.lines.len())
+        .selected_diff()
+        .map(|diff| diff.lines.len())
         .unwrap_or(loading_lines.len());
     let inner_height = content_area.height as usize;
-
-    // Clamp scroll offset
-    let max_scroll = total_lines.saturating_sub(inner_height);
-    let scroll = app.scroll_offset.min(max_scroll);
-    app.scroll_offset = scroll;
-
+    let scroll = app
+        .ui
+        .scroll_offset
+        .min(total_lines.saturating_sub(inner_height));
     let end = scroll.saturating_add(inner_height).min(total_lines);
-    let is_diff_focused = app.focus == Panel::Diff;
-    let visible_lines = match app.get_diff() {
-        Some(diff) => style_visible_diff_lines(&diff.lines[scroll..end], is_diff_focused),
-        None => style_visible_diff_lines(&loading_lines, is_diff_focused),
+    let is_diff_focused = app.ui.focus == Panel::Diff;
+
+    let visible_lines = if let Some(diff) = app.selected_diff() {
+        let cursor = app.ui.diff_cursor.saturating_sub(scroll);
+        style_visible_diff_lines(&diff.lines[scroll..end], is_diff_focused, Some(cursor))
+    } else if app.selected_diff_is_loading() {
+        style_visible_diff_lines(&loading_lines, is_diff_focused, Some(0))
+    } else {
+        style_visible_diff_lines(&loading_lines, is_diff_focused, Some(0))
     };
 
-    let para = Paragraph::new(Text::from(visible_lines)).block(block);
+    frame.render_widget(
+        Paragraph::new(Text::from(visible_lines)).block(block),
+        content_area,
+    );
 
-    frame.render_widget(para, content_area);
-
-    // Scrollbar
     if total_lines > inner_height {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
         let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll);
@@ -263,12 +244,17 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-fn style_visible_diff_lines(lines: &[Line<'_>], is_diff_focused: bool) -> Vec<Line<'static>> {
+fn style_visible_diff_lines(
+    lines: &[Line<'_>],
+    is_diff_focused: bool,
+    selected_line: Option<usize>,
+) -> Vec<Line<'static>> {
     lines
         .iter()
         .enumerate()
         .map(|(index, line)| {
-            let background = resolve_diff_line_background(line, is_diff_focused && index == 0);
+            let background =
+                resolve_diff_line_background(line, is_diff_focused && selected_line == Some(index));
             let spans = line
                 .spans
                 .iter()
@@ -339,19 +325,19 @@ fn shorten_path(path: &str, max_len: usize) -> String {
     }
     let keep = max_len.saturating_sub(3);
     let start = path.len() - keep;
-    format!("…{}", &path[start..])
+    format!("...{}", &path[start..])
 }
 
-fn format_stat_spans(add: u32, del: u32) -> Vec<Span<'static>> {
+fn format_stat_spans(additions: u32, deletions: u32) -> Vec<Span<'static>> {
     let green = Style::default().fg(Color::Green);
     let red = Style::default().fg(Color::Red);
-    match (add, del) {
+    match (additions, deletions) {
         (0, 0) => vec![],
-        (a, 0) => vec![Span::styled(format!("+{a}"), green)],
-        (0, d) => vec![Span::styled(format!("-{d}"), red)],
-        (a, d) => vec![
-            Span::styled(format!("+{a}"), green),
-            Span::styled(format!("-{d}"), red),
+        (additions, 0) => vec![Span::styled(format!("+{additions}"), green)],
+        (0, deletions) => vec![Span::styled(format!("-{deletions}"), red)],
+        (additions, deletions) => vec![
+            Span::styled(format!("+{additions}"), green),
+            Span::styled(format!("-{deletions}"), red),
         ],
     }
 }

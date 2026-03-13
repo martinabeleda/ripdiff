@@ -1,6 +1,6 @@
-use crate::diff::{fetch_diff, DiffContent, DiffMode};
+use crate::diff::{DiffContent, DiffMode, DiffRequest, DiffService};
 use crate::event::Event;
-use crate::git::{list_changed_files, repo_root, FileStat, FileStatus};
+use crate::git::{load_snapshot, repo_root, FileStat, FileStatus, RepoSnapshot};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::Backend;
@@ -18,40 +18,56 @@ pub enum Panel {
 
 pub struct App {
     pub repo_root: PathBuf,
-    pub files: Vec<FileStat>,
-    pub selected: usize,
-    pub scroll_offset: usize,
-    pub diff_cache: HashMap<String, DiffContent>,
-    pub hidden_files: HashSet<String>,
-    pub diff_mode: DiffMode,
-    pub panel_width: u16,
-    pub panel_height: u16,
-    pub focus: Panel,
+    pub snapshot: RepoSnapshot,
+    pub ui: UiState,
+    pub diff_store: DiffStore,
     pub last_refresh: Instant,
     pub should_quit: bool,
     pub error_message: Option<String>,
 }
 
+pub struct UiState {
+    pub selected: usize,
+    pub diff_cursor: usize,
+    pub scroll_offset: usize,
+    pub hidden_files: HashSet<String>,
+    pub diff_mode: DiffMode,
+    pub panel_width: u16,
+    pub panel_height: u16,
+    pub focus: Panel,
+}
+
+pub struct DiffStore {
+    pub cache: HashMap<DiffRequest, DiffContent>,
+    pub loading: HashSet<DiffRequest>,
+}
+
 impl App {
     pub fn new(start_path: PathBuf) -> Result<Self> {
         let root = repo_root(&start_path)?;
-        let mut app = App {
+        let snapshot = load_snapshot(&root)?;
+
+        Ok(App {
             repo_root: root,
-            files: Vec::new(),
-            selected: 0,
-            scroll_offset: 0,
-            diff_cache: HashMap::new(),
-            hidden_files: HashSet::new(),
-            diff_mode: DiffMode::Inline,
-            panel_width: 80,
-            panel_height: 40,
-            focus: Panel::Files,
+            snapshot,
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::new(),
+                loading: HashSet::new(),
+            },
             last_refresh: Instant::now() - Duration::from_secs(10),
             should_quit: false,
             error_message: None,
-        };
-        app.refresh();
-        Ok(app)
+        })
     }
 
     pub fn refresh(&mut self) {
@@ -59,21 +75,19 @@ impl App {
             return;
         }
         self.last_refresh = Instant::now();
-        self.diff_cache.clear();
 
-        match list_changed_files(&self.repo_root) {
-            Ok(files) => {
-                // Keep selection in bounds
-                if files.is_empty() {
-                    self.selected = 0;
-                } else if self.selected >= files.len() {
-                    self.selected = files.len() - 1;
+        match load_snapshot(&self.repo_root) {
+            Ok(snapshot) => {
+                let snapshot_changed = self.snapshot != snapshot;
+                self.apply_snapshot(snapshot);
+                if snapshot_changed {
+                    self.diff_store.cache.clear();
+                    self.diff_store.loading.clear();
                 }
-                self.files = files;
                 self.error_message = None;
             }
-            Err(e) => {
-                self.error_message = Some(format!("git error: {e}"));
+            Err(error) => {
+                self.error_message = Some(format!("git error: {error}"));
             }
         }
     }
@@ -83,159 +97,196 @@ impl App {
         self.refresh();
     }
 
-    pub fn selected_file(&self) -> Option<&FileStat> {
-        self.files.get(self.selected)
+    pub fn files(&self) -> &[FileStat] {
+        &self.snapshot.files
     }
 
-    pub fn get_diff(&mut self) -> Option<&DiffContent> {
-        let file = self.files.get(self.selected)?;
-        let path = file.path.clone();
+    pub fn selected_file(&self) -> Option<&FileStat> {
+        self.snapshot.files.get(self.ui.selected)
+    }
 
-        if self.hidden_files.contains(&path) {
+    pub fn selected_diff_request(&self) -> Option<DiffRequest> {
+        let file = self.selected_file()?;
+        if self.ui.hidden_files.contains(&file.path) {
             return None;
         }
 
-        if !self.diff_cache.contains_key(&path) {
-            let is_untracked = file.status == FileStatus::Untracked;
-            let result = fetch_diff(
-                &self.repo_root,
-                &path,
-                self.panel_width,
-                &self.diff_mode,
-                is_untracked,
-            );
-            match result {
-                Ok(content) => {
-                    self.diff_cache.insert(path.clone(), content);
-                }
-                Err(e) => {
-                    // Insert empty content with error message
-                    use ratatui::style::{Color, Style};
-                    use ratatui::text::{Line, Span};
-                    let error_line = Line::from(Span::styled(
-                        format!("Error: {e}"),
-                        Style::default().fg(Color::Red),
-                    ));
-                    self.diff_cache.insert(
-                        path.clone(),
-                        DiffContent {
-                            lines: vec![error_line],
-                        },
-                    );
-                }
-            }
+        Some(DiffRequest {
+            path: file.path.clone(),
+            panel_width: self.ui.panel_width,
+            mode: self.ui.diff_mode.clone(),
+        })
+    }
+
+    pub fn selected_diff(&self) -> Option<&DiffContent> {
+        let request = self.selected_diff_request()?;
+        self.diff_store.cache.get(&request)
+    }
+
+    pub fn selected_diff_is_loading(&self) -> bool {
+        self.selected_diff_request()
+            .map(|request| self.diff_store.loading.contains(&request))
+            .unwrap_or(false)
+    }
+
+    pub fn ensure_selected_diff(&mut self, service: &DiffService) {
+        let Some(file) = self.selected_file() else {
+            return;
+        };
+        let path = file.path.clone();
+        let is_untracked = file.status == FileStatus::Untracked;
+
+        if self.ui.hidden_files.contains(&path) {
+            return;
         }
 
-        self.diff_cache.get(&path)
+        let request = DiffRequest {
+            path,
+            panel_width: self.ui.panel_width,
+            mode: self.ui.diff_mode.clone(),
+        };
+
+        if self.diff_store.cache.contains_key(&request)
+            || self.diff_store.loading.contains(&request)
+        {
+            return;
+        }
+
+        self.diff_store.loading.insert(request.clone());
+        service.request(request, is_untracked);
+    }
+
+    pub fn handle_loaded_diff(
+        &mut self,
+        request: DiffRequest,
+        result: Result<DiffContent, String>,
+    ) {
+        self.diff_store.loading.remove(&request);
+        let content = match result {
+            Ok(content) => content,
+            Err(error) => error_diff_content(error),
+        };
+        self.diff_store.cache.insert(request, content);
     }
 
     pub fn scroll_down(&mut self, amount: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_add(amount);
+        let max_cursor = self.selected_diff_len().saturating_sub(1);
+        self.ui.diff_cursor = self.ui.diff_cursor.saturating_add(amount).min(max_cursor);
+        self.sync_diff_viewport();
     }
 
     pub fn scroll_up(&mut self, amount: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+        self.ui.diff_cursor = self.ui.diff_cursor.saturating_sub(amount);
+        self.sync_diff_viewport();
     }
 
     pub fn move_down(&mut self) {
-        if self.selected + 1 < self.files.len() {
-            self.selected += 1;
-            self.scroll_offset = 0;
+        if self.ui.selected + 1 < self.snapshot.files.len() {
+            self.ui.selected += 1;
+            self.reset_diff_position();
         }
     }
 
     pub fn move_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-            self.scroll_offset = 0;
+        if self.ui.selected > 0 {
+            self.ui.selected -= 1;
+            self.reset_diff_position();
         }
     }
 
     pub fn jump_top(&mut self) {
-        self.selected = 0;
-        self.scroll_offset = 0;
+        self.ui.selected = 0;
+        self.reset_diff_position();
     }
 
     pub fn jump_bottom(&mut self) {
-        if !self.files.is_empty() {
-            self.selected = self.files.len() - 1;
-            self.scroll_offset = 0;
+        if !self.snapshot.files.is_empty() {
+            self.ui.selected = self.snapshot.files.len() - 1;
+            self.reset_diff_position();
         }
     }
 
     pub fn toggle_hidden(&mut self) {
-        if let Some(file) = self.files.get(self.selected) {
+        if let Some(file) = self.selected_file() {
             let path = file.path.clone();
-            if self.hidden_files.contains(&path) {
-                self.hidden_files.remove(&path);
+            if self.ui.hidden_files.contains(&path) {
+                self.ui.hidden_files.remove(&path);
             } else {
-                self.hidden_files.insert(path);
-                self.scroll_offset = 0;
+                self.ui.hidden_files.insert(path);
+                self.reset_diff_position();
             }
         }
     }
 
     pub fn toggle_diff_mode(&mut self) {
-        self.diff_mode = self.diff_mode.toggle();
-        self.diff_cache.clear();
-        self.scroll_offset = 0;
+        self.ui.diff_mode = self.ui.diff_mode.toggle();
+        self.diff_store.cache.clear();
+        self.diff_store.loading.clear();
+        self.reset_diff_position();
     }
 
-    /// Find hunk boundary lines in the current diff.
-    /// Hunk boundaries are lines starting with "@@" (unified diff) or
-    /// lines that contain a filename header from difftastic.
     pub fn diff_hunk_offsets(&self) -> Vec<usize> {
-        let path = match self.files.get(self.selected) {
-            Some(f) => &f.path,
-            None => return vec![],
-        };
-        let diff = match self.diff_cache.get(path) {
-            Some(d) => d,
-            None => return vec![],
+        let Some(diff) = self.selected_diff() else {
+            return vec![];
         };
 
-        let mut offsets = Vec::new();
-        for (i, line) in diff.lines.iter().enumerate() {
-            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let mut header_offsets = Vec::new();
+        let mut block_offsets = Vec::new();
+        let mut previous_changed = false;
+
+        for (index, line) in diff.lines.iter().enumerate() {
+            let text: String = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
             let trimmed = text.trim_start();
-            // Unified diff hunk headers, or difftastic section markers
             if trimmed.starts_with("@@") || trimmed.starts_with("───") {
-                offsets.push(i);
+                header_offsets.push(index);
             }
+
+            let is_changed = is_change_line(line);
+            if is_changed && !previous_changed {
+                block_offsets.push(index);
+            }
+            previous_changed = is_changed;
         }
-        offsets
+
+        if header_offsets.is_empty() {
+            block_offsets
+        } else {
+            header_offsets
+        }
     }
 
     pub fn jump_next_hunk(&mut self) {
         let hunks = self.diff_hunk_offsets();
-        if let Some(&offset) = hunks.iter().find(|&&o| o > self.scroll_offset) {
-            self.scroll_offset = offset;
+        if let Some(&offset) = hunks.iter().find(|&&offset| offset > self.ui.diff_cursor) {
+            self.ui.diff_cursor = offset;
+            self.sync_diff_viewport();
         }
     }
 
     pub fn jump_prev_hunk(&mut self) {
         let hunks = self.diff_hunk_offsets();
-        if let Some(&offset) = hunks.iter().rev().find(|&&o| o < self.scroll_offset) {
-            self.scroll_offset = offset;
+        if let Some(&offset) = hunks
+            .iter()
+            .rev()
+            .find(|&&offset| offset < self.ui.diff_cursor)
+        {
+            self.ui.diff_cursor = offset;
+            self.sync_diff_viewport();
         }
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
-        // Global keys (work in any panel)
         match (key.code, key.modifiers) {
             (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Esc, _) => {
                 self.should_quit = true;
                 return;
             }
-            (KeyCode::Tab, _) => {
-                self.focus = match self.focus {
-                    Panel::Files => Panel::Diff,
-                    Panel::Diff => Panel::Files,
-                };
-                return;
-            }
-            (KeyCode::BackTab, _) => {
-                self.focus = match self.focus {
+            (KeyCode::Tab, _) | (KeyCode::BackTab, _) => {
+                self.ui.focus = match self.ui.focus {
                     Panel::Files => Panel::Diff,
                     Panel::Diff => Panel::Files,
                 };
@@ -252,7 +303,7 @@ impl App {
             _ => {}
         }
 
-        match self.focus {
+        match self.ui.focus {
             Panel::Files => self.handle_files_key(key),
             Panel::Diff => self.handle_diff_key(key),
         }
@@ -263,7 +314,7 @@ impl App {
             KeyCode::Char('j') | KeyCode::Down => self.move_down(),
             KeyCode::Char('k') | KeyCode::Up => self.move_up(),
             KeyCode::Char('l') | KeyCode::Right => {
-                self.focus = Panel::Diff;
+                self.ui.focus = Panel::Diff;
             }
             KeyCode::Char('g') => self.jump_top(),
             KeyCode::Char('G') => self.jump_bottom(),
@@ -273,32 +324,155 @@ impl App {
     }
 
     fn handle_diff_key(&mut self, key: KeyEvent) {
-        let half_page = (self.panel_height / 2) as usize;
+        let half_page = (self.ui.panel_height / 2) as usize;
         match (key.code, key.modifiers) {
-            // Line-by-line scrolling
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => self.scroll_down(1),
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => self.scroll_up(1),
-            // Back to file list
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
-                self.focus = Panel::Files;
+                self.ui.focus = Panel::Files;
             }
-            // Half-page scrolling
             (KeyCode::Char('d'), KeyModifiers::CONTROL) => self.scroll_down(half_page),
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.scroll_up(half_page),
-            // Top / bottom of diff
             (KeyCode::Char('g'), KeyModifiers::NONE) => {
-                self.scroll_offset = 0;
+                self.ui.diff_cursor = 0;
+                self.sync_diff_viewport();
             }
             (KeyCode::Char('G'), KeyModifiers::NONE) => {
-                self.scroll_offset = usize::MAX;
+                self.ui.diff_cursor = self.selected_diff_len().saturating_sub(1);
+                self.sync_diff_viewport();
             }
-            // Hunk jumping
-            (KeyCode::Char(']'), KeyModifiers::NONE) => self.jump_next_hunk(),
-            (KeyCode::Char('['), KeyModifiers::NONE) => self.jump_prev_hunk(),
-            // Toggle visibility still works
             (KeyCode::Char(' '), _) | (KeyCode::Enter, _) => self.toggle_hidden(),
+            (code, _) if is_next_hunk_key(code) => self.jump_next_hunk(),
+            (code, _) if is_prev_hunk_key(code) => self.jump_prev_hunk(),
             _ => {}
         }
+    }
+
+    fn apply_snapshot(&mut self, snapshot: RepoSnapshot) {
+        let selected_path = self.selected_file().map(|file| file.path.clone());
+        self.snapshot = snapshot;
+
+        self.ui
+            .hidden_files
+            .retain(|path| self.snapshot.files.iter().any(|file| &file.path == path));
+
+        if self.snapshot.files.is_empty() {
+            self.ui.selected = 0;
+            self.reset_diff_position();
+            return;
+        }
+
+        if let Some(path) = selected_path {
+            if let Some(index) = self
+                .snapshot
+                .files
+                .iter()
+                .position(|file| file.path == path)
+            {
+                self.ui.selected = index;
+                self.sync_diff_position();
+                return;
+            }
+        }
+
+        if self.ui.selected >= self.snapshot.files.len() {
+            self.ui.selected = self.snapshot.files.len() - 1;
+        }
+        self.sync_diff_position();
+    }
+
+    fn reset_diff_position(&mut self) {
+        self.ui.diff_cursor = 0;
+        self.ui.scroll_offset = 0;
+    }
+
+    fn selected_diff_len(&self) -> usize {
+        self.selected_diff()
+            .map(|diff| diff.lines.len())
+            .unwrap_or(1)
+    }
+
+    fn sync_diff_position(&mut self) {
+        let max_cursor = self.selected_diff_len().saturating_sub(1);
+        self.ui.diff_cursor = self.ui.diff_cursor.min(max_cursor);
+        self.sync_diff_viewport();
+    }
+
+    fn sync_diff_viewport(&mut self) {
+        let height = self.ui.panel_height as usize;
+        if height == 0 {
+            self.ui.scroll_offset = 0;
+            return;
+        }
+
+        let max_scroll = self.selected_diff_len().saturating_sub(height);
+        if self.ui.diff_cursor < self.ui.scroll_offset {
+            self.ui.scroll_offset = self.ui.diff_cursor;
+        } else {
+            let visible_end = self.ui.scroll_offset.saturating_add(height);
+            if self.ui.diff_cursor >= visible_end {
+                self.ui.scroll_offset =
+                    self.ui.diff_cursor.saturating_add(1).saturating_sub(height);
+            }
+        }
+        self.ui.scroll_offset = self.ui.scroll_offset.min(max_scroll);
+    }
+}
+
+fn is_next_hunk_key(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Char(']') | KeyCode::Char('}'))
+}
+
+fn is_prev_hunk_key(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Char('[') | KeyCode::Char('{'))
+}
+
+fn is_change_line(line: &ratatui::text::Line<'_>) -> bool {
+    let has_green = line
+        .spans
+        .iter()
+        .any(|span| is_addition_color(span.style.fg));
+    let has_red = line
+        .spans
+        .iter()
+        .any(|span| is_deletion_color(span.style.fg));
+
+    has_green || has_red
+}
+
+fn is_addition_color(color: Option<ratatui::style::Color>) -> bool {
+    use ratatui::style::Color;
+
+    matches!(
+        color,
+        Some(Color::Green)
+            | Some(Color::LightGreen)
+            | Some(Color::Indexed(2))
+            | Some(Color::Indexed(10))
+    )
+}
+
+fn is_deletion_color(color: Option<ratatui::style::Color>) -> bool {
+    use ratatui::style::Color;
+
+    matches!(
+        color,
+        Some(Color::Red)
+            | Some(Color::LightRed)
+            | Some(Color::Indexed(1))
+            | Some(Color::Indexed(9))
+    )
+}
+
+fn error_diff_content(error: String) -> DiffContent {
+    use ratatui::style::{Color, Style};
+    use ratatui::text::{Line, Span};
+
+    DiffContent {
+        lines: vec![Line::from(Span::styled(
+            format!("Error: {error}"),
+            Style::default().fg(Color::Red),
+        ))],
     }
 }
 
@@ -306,26 +480,23 @@ pub async fn run<B: Backend>(
     terminal: &mut Terminal<B>,
     mut app: App,
     mut rx: mpsc::UnboundedReceiver<Event>,
+    diff_service: DiffService,
 ) -> Result<()> {
     loop {
         if app.should_quit {
             break;
         }
 
-        // Update panel width based on terminal size
         let size = terminal.size()?;
         let right_width = (size.width as f32 * 0.75) as u16;
-        let panel_height = size.height.saturating_sub(3); // title + borders
-        if right_width != app.panel_width {
-            app.panel_width = right_width;
-            app.diff_cache.clear();
+        let panel_height = size.height.saturating_sub(2);
+        if right_width != app.ui.panel_width {
+            app.ui.panel_width = right_width;
         }
-        app.panel_height = panel_height;
+        app.ui.panel_height = panel_height;
 
-        // Pre-fetch diff for selected file
-        let _ = app.get_diff();
-
-        terminal.draw(|frame| crate::ui::render(frame, &mut app))?;
+        app.ensure_selected_diff(&diff_service);
+        terminal.draw(|frame| crate::ui::render(frame, &app))?;
 
         match rx.recv().await {
             Some(Event::Key(key)) => {
@@ -334,11 +505,10 @@ pub async fn run<B: Backend>(
                     break;
                 }
             }
-            Some(Event::Resize) => {
-                app.diff_cache.clear();
-            }
+            Some(Event::Resize) => {}
             Some(Event::FsChange) => app.refresh(),
             Some(Event::Tick) => app.refresh(),
+            Some(Event::DiffLoaded { request, result }) => app.handle_loaded_diff(request, result),
             None => break,
         }
     }
@@ -350,6 +520,9 @@ pub async fn run<B: Backend>(
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
+    use ratatui::style::{Color, Style};
+    use ratatui::text::Line;
+    use ratatui::text::Span;
 
     #[tokio::test]
     async fn run_exits_when_q_is_pressed() {
@@ -365,24 +538,322 @@ mod tests {
 
         let app = App {
             repo_root: PathBuf::from("."),
-            files: Vec::new(),
-            selected: 0,
-            scroll_offset: 0,
-            diff_cache: HashMap::new(),
-            hidden_files: HashSet::new(),
-            diff_mode: DiffMode::Inline,
-            panel_width: 80,
-            panel_height: 40,
-            focus: Panel::Files,
+            snapshot: RepoSnapshot::default(),
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::new(),
+                loading: HashSet::new(),
+            },
             last_refresh: Instant::now(),
             should_quit: false,
             error_message: None,
         };
 
-        let result =
-            tokio::time::timeout(Duration::from_millis(250), run(&mut terminal, app, rx)).await;
+        let diff_service = DiffService::new(PathBuf::from("."), tx);
+        let result = tokio::time::timeout(
+            Duration::from_millis(250),
+            run(&mut terminal, app, rx, diff_service),
+        )
+        .await;
 
         assert!(result.is_ok(), "run loop should exit after q");
-        assert!(result.unwrap().is_ok(), "run loop should exit cleanly");
+        assert!(
+            result.expect("timeout should resolve").is_ok(),
+            "run loop should exit cleanly"
+        );
+    }
+
+    #[test]
+    fn refresh_invalidates_cached_diffs() {
+        let mut app = App {
+            repo_root: PathBuf::from("."),
+            snapshot: RepoSnapshot {
+                files: vec![FileStat {
+                    path: "src/main.rs".to_string(),
+                    additions: 1,
+                    deletions: 0,
+                    status: FileStatus::Modified,
+                    content_signature: None,
+                }],
+            },
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::from([(
+                    DiffRequest {
+                        path: "src/main.rs".to_string(),
+                        panel_width: 80,
+                        mode: DiffMode::Inline,
+                    },
+                    DiffContent {
+                        lines: vec![Line::from("stale")],
+                    },
+                )]),
+                loading: HashSet::from([DiffRequest {
+                    path: "src/main.rs".to_string(),
+                    panel_width: 80,
+                    mode: DiffMode::Inline,
+                }]),
+            },
+            last_refresh: Instant::now() - Duration::from_secs(10),
+            should_quit: false,
+            error_message: None,
+        };
+
+        app.refresh();
+
+        assert!(app.diff_store.cache.is_empty());
+        assert!(app.diff_store.loading.is_empty());
+    }
+
+    #[test]
+    fn apply_snapshot_keeps_cache_when_snapshot_is_unchanged() {
+        let snapshot = RepoSnapshot {
+            files: vec![FileStat {
+                path: "src/main.rs".to_string(),
+                additions: 1,
+                deletions: 0,
+                status: FileStatus::Modified,
+                content_signature: None,
+            }],
+        };
+        let request = DiffRequest {
+            path: "src/main.rs".to_string(),
+            panel_width: 80,
+            mode: DiffMode::Inline,
+        };
+        let mut app = App {
+            repo_root: PathBuf::from("."),
+            snapshot: snapshot.clone(),
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::from([(
+                    request.clone(),
+                    DiffContent {
+                        lines: vec![Line::from("ok")],
+                    },
+                )]),
+                loading: HashSet::from([request.clone()]),
+            },
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        };
+
+        let snapshot_changed = app.snapshot != snapshot;
+        app.apply_snapshot(snapshot);
+        if snapshot_changed {
+            app.diff_store.cache.clear();
+            app.diff_store.loading.clear();
+        }
+
+        assert!(app.diff_store.cache.contains_key(&request));
+        assert!(app.diff_store.loading.contains(&request));
+    }
+
+    #[test]
+    fn diff_cursor_moves_independently_from_top_visible_line() {
+        let request = DiffRequest {
+            path: "src/main.rs".to_string(),
+            panel_width: 80,
+            mode: DiffMode::Inline,
+        };
+        let mut app = App {
+            repo_root: PathBuf::from("."),
+            snapshot: RepoSnapshot {
+                files: vec![FileStat {
+                    path: "src/main.rs".to_string(),
+                    additions: 1,
+                    deletions: 0,
+                    status: FileStatus::Modified,
+                    content_signature: None,
+                }],
+            },
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 3,
+                focus: Panel::Diff,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::from([(
+                    request,
+                    DiffContent {
+                        lines: vec![
+                            Line::from("1"),
+                            Line::from("2"),
+                            Line::from("3"),
+                            Line::from("4"),
+                            Line::from("5"),
+                        ],
+                    },
+                )]),
+                loading: HashSet::new(),
+            },
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        };
+
+        app.scroll_down(1);
+        assert_eq!(app.ui.diff_cursor, 1);
+        assert_eq!(app.ui.scroll_offset, 0);
+
+        app.scroll_down(2);
+        assert_eq!(app.ui.diff_cursor, 3);
+        assert_eq!(app.ui.scroll_offset, 1);
+    }
+
+    #[test]
+    fn handle_key_uses_brackets_for_hunk_navigation() {
+        let request = DiffRequest {
+            path: "src/main.rs".to_string(),
+            panel_width: 80,
+            mode: DiffMode::Inline,
+        };
+        let mut app = App {
+            repo_root: PathBuf::from("."),
+            snapshot: RepoSnapshot {
+                files: vec![FileStat {
+                    path: "src/main.rs".to_string(),
+                    additions: 1,
+                    deletions: 0,
+                    status: FileStatus::Modified,
+                    content_signature: None,
+                }],
+            },
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 3,
+                focus: Panel::Diff,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::from([(
+                    request,
+                    DiffContent {
+                        lines: vec![
+                            Line::from("header"),
+                            Line::from("@@ hunk one @@"),
+                            Line::from("body"),
+                            Line::from("@@ hunk two @@"),
+                            Line::from("tail"),
+                        ],
+                    },
+                )]),
+                loading: HashSet::new(),
+            },
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        };
+
+        app.handle_key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE));
+        assert_eq!(app.ui.diff_cursor, 1);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('}'), KeyModifiers::SHIFT));
+        assert_eq!(app.ui.diff_cursor, 3);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('{'), KeyModifiers::SHIFT));
+        assert_eq!(app.ui.diff_cursor, 1);
+    }
+
+    #[test]
+    fn diff_hunk_offsets_fall_back_to_change_blocks_for_difft_output() {
+        let request = DiffRequest {
+            path: "src/main.rs".to_string(),
+            panel_width: 80,
+            mode: DiffMode::Inline,
+        };
+        let app = App {
+            repo_root: PathBuf::from("."),
+            snapshot: RepoSnapshot {
+                files: vec![FileStat {
+                    path: "src/main.rs".to_string(),
+                    additions: 2,
+                    deletions: 2,
+                    status: FileStatus::Modified,
+                    content_signature: None,
+                }],
+            },
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 3,
+                focus: Panel::Diff,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::from([(
+                    request,
+                    DiffContent {
+                        lines: vec![
+                            Line::from("src/main.rs --- Rust"),
+                            Line::from("1 fn main() {"),
+                            Line::from(Span::styled(
+                                "2     println!(\"old\");",
+                                Style::default().fg(Color::Red),
+                            )),
+                            Line::from(Span::styled(
+                                "  2   println!(\"new\");",
+                                Style::default().fg(Color::Green),
+                            )),
+                            Line::from("3 }"),
+                            Line::from(Span::styled(
+                                "5     println!(\"old2\");",
+                                Style::default().fg(Color::Red),
+                            )),
+                            Line::from(Span::styled(
+                                "  5   println!(\"new2\");",
+                                Style::default().fg(Color::Green),
+                            )),
+                        ],
+                    },
+                )]),
+                loading: HashSet::new(),
+            },
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        };
+
+        assert_eq!(app.diff_hunk_offsets(), vec![2, 5]);
     }
 }
