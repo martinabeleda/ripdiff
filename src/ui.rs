@@ -1,11 +1,14 @@
 use crate::app::{App, Panel};
 use crate::git::FileStatus;
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
+    Frame,
 };
 
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -53,10 +56,7 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
         .bg(Color::Cyan)
         .add_modifier(Modifier::BOLD);
 
-    frame.render_widget(
-        Paragraph::new(title_text).style(style),
-        area,
-    );
+    frame.render_widget(Paragraph::new(title_text).style(style), area);
 }
 
 fn render_body(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -94,15 +94,9 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
             let line = if i == app.selected {
                 let mut spans = vec![
                     Span::raw(format!("{eye} ")),
-                    Span::styled(
-                        f.status.symbol(),
-                        Style::default().fg(status_color),
-                    ),
+                    Span::styled(f.status.symbol(), Style::default().fg(status_color)),
                     Span::raw(" "),
-                    Span::styled(
-                        display_path,
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(display_path, Style::default().add_modifier(Modifier::BOLD)),
                     Span::raw("  "),
                 ];
                 spans.extend(stat_spans);
@@ -110,10 +104,7 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 let mut spans = vec![
                     Span::raw(format!("{eye} ")),
-                    Span::styled(
-                        f.status.symbol(),
-                        Style::default().fg(status_color),
-                    ),
+                    Span::styled(f.status.symbol(), Style::default().fg(status_color)),
                     Span::raw(" "),
                     Span::raw(display_path),
                     Span::raw("  "),
@@ -128,7 +119,11 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
 
     let no_changes = items.is_empty();
 
-    let border_color = if app.focus == Panel::Files { Color::Cyan } else { Color::DarkGray };
+    let border_color = if app.focus == Panel::Files {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     // Only draw right border as a vertical divider between panels
     let block = Block::default()
         .borders(Borders::RIGHT)
@@ -137,20 +132,21 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
     if no_changes {
         let msg = Paragraph::new(Text::from(vec![
             Line::from(""),
-            Line::from(Span::styled("  no changes", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "  no changes",
+                Style::default().fg(Color::DarkGray),
+            )),
         ]))
         .block(block);
         frame.render_widget(msg, area);
         return;
     }
 
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        );
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let mut state = ListState::default();
     state.select(Some(app.selected));
@@ -167,7 +163,11 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_hidden = app.hidden_files.contains(&file_path);
 
     // File name header line at top of diff panel
-    let header_color = if app.focus == Panel::Diff { Color::Cyan } else { Color::DarkGray };
+    let header_color = if app.focus == Panel::Diff {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     let header = if file_path.is_empty() {
         "diff".to_string()
     } else {
@@ -184,7 +184,9 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(
         Paragraph::new(Span::styled(
             format!(" {header}"),
-            Style::default().fg(header_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(header_color)
+                .add_modifier(Modifier::BOLD),
         )),
         chunks[0],
     );
@@ -239,10 +241,7 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     let end = scroll.saturating_add(inner_height).min(total_lines);
     let is_diff_focused = app.focus == Panel::Diff;
     let visible_lines = match app.get_diff() {
-        Some(diff) => style_visible_diff_lines(
-            &diff.lines[scroll..end],
-            is_diff_focused,
-        ),
+        Some(diff) => style_visible_diff_lines(&diff.lines[scroll..end], is_diff_focused),
         None => style_visible_diff_lines(&loading_lines, is_diff_focused),
     };
 
@@ -253,8 +252,7 @@ fn render_diff_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     // Scrollbar
     if total_lines > inner_height {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
-        let mut scrollbar_state =
-            ScrollbarState::new(total_lines).position(scroll);
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll);
         let scrollbar_area = Rect {
             x: content_area.right() - 1,
             y: content_area.y,
@@ -293,8 +291,14 @@ fn resolve_diff_line_background(line: &Line<'_>, is_cursor_line: bool) -> Color 
 }
 
 fn detect_diff_line_kind(line: &Line<'_>) -> Option<DiffLineKind> {
-    let has_green = line.spans.iter().any(|span| is_addition_color(span.style.fg));
-    let has_red = line.spans.iter().any(|span| is_deletion_color(span.style.fg));
+    let has_green = line
+        .spans
+        .iter()
+        .any(|span| is_addition_color(span.style.fg));
+    let has_red = line
+        .spans
+        .iter()
+        .any(|span| is_deletion_color(span.style.fg));
 
     match (has_green, has_red) {
         (true, false) => Some(DiffLineKind::Addition),

@@ -35,7 +35,12 @@ pub struct FileStat {
 
 pub fn repo_root(start: &Path) -> Result<PathBuf> {
     let output = Command::new("git")
-        .args(["-C", start.to_str().unwrap_or("."), "rev-parse", "--show-toplevel"])
+        .args([
+            "-C",
+            start.to_str().unwrap_or("."),
+            "rev-parse",
+            "--show-toplevel",
+        ])
         .output()
         .context("Failed to run git rev-parse")?;
 
@@ -54,13 +59,25 @@ pub fn repo_root(start: &Path) -> Result<PathBuf> {
 pub fn list_changed_files(repo_root: &Path) -> Result<Vec<FileStat>> {
     // Get numstat for additions/deletions
     let numstat = Command::new("git")
-        .args(["-C", repo_root.to_str().unwrap_or("."), "diff", "HEAD", "--numstat"])
+        .args([
+            "-C",
+            repo_root.to_str().unwrap_or("."),
+            "diff",
+            "HEAD",
+            "--numstat",
+        ])
         .output()
         .context("Failed to run git diff --numstat")?;
 
     // Also get unstaged changes not in HEAD (new untracked won't show, but staged+unstaged will)
     let name_status = Command::new("git")
-        .args(["-C", repo_root.to_str().unwrap_or("."), "diff", "HEAD", "--name-status"])
+        .args([
+            "-C",
+            repo_root.to_str().unwrap_or("."),
+            "diff",
+            "HEAD",
+            "--name-status",
+        ])
         .output()
         .context("Failed to run git diff --name-status")?;
 
@@ -98,9 +115,7 @@ pub fn list_changed_files(repo_root: &Path) -> Result<Vec<FileStat>> {
         let additions = parts[0].trim().parse::<u32>().unwrap_or(0);
         let deletions = parts[1].trim().parse::<u32>().unwrap_or(0);
         let path = parts[2].trim().to_string();
-        let status = status_map
-            .remove(&path)
-            .unwrap_or(FileStatus::Unknown);
+        let status = status_map.remove(&path).unwrap_or(FileStatus::Unknown);
 
         files.push(FileStat {
             path,

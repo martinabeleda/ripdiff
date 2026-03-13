@@ -8,9 +8,9 @@ use anyhow::Result;
 use clap::Parser;
 use crossterm::{
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -26,7 +26,9 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let start_path = args.path.unwrap_or_else(|| std::env::current_dir().unwrap());
+    let start_path = args
+        .path
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
 
     // Build App before touching the terminal so errors are readable
     let app = app::App::new(start_path.clone())?;

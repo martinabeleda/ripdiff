@@ -75,7 +75,9 @@ fn show_new_file(repo_root: &Path, file_path: &str) -> Result<DiffContent> {
     let mut lines = vec![
         Line::from(Span::styled(
             format!("new file: {file_path}"),
-            Style::default().fg(Color::Green).add_modifier(ratatui::style::Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(ratatui::style::Modifier::BOLD),
         )),
         Line::from(""),
     ];
@@ -86,10 +88,7 @@ fn show_new_file(repo_root: &Path, file_path: &str) -> Result<DiffContent> {
                 format!("{:>4} ", i + 1),
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(
-                format!("+ {text}"),
-                Style::default().fg(Color::Green),
-            ),
+            Span::styled(format!("+ {text}"), Style::default().fg(Color::Green)),
         ]));
     }
 
@@ -128,9 +127,7 @@ fn plain_git_diff(repo_root: &Path, file_path: &str) -> Result<Vec<u8>> {
 fn parse_ansi_to_lines(bytes: &[u8]) -> Result<DiffContent> {
     use ansi_to_tui::IntoText;
 
-    let text: Text = bytes
-        .into_text()
-        .context("Failed to parse ANSI output")?;
+    let text: Text = bytes.into_text().context("Failed to parse ANSI output")?;
 
     // Convert to 'static lifetime by cloning
     let lines: Vec<Line<'static>> = text
@@ -140,10 +137,7 @@ fn parse_ansi_to_lines(bytes: &[u8]) -> Result<DiffContent> {
             let spans: Vec<ratatui::text::Span<'static>> = line
                 .spans
                 .into_iter()
-                .map(|span| ratatui::text::Span::styled(
-                    span.content.into_owned(),
-                    span.style,
-                ))
+                .map(|span| ratatui::text::Span::styled(span.content.into_owned(), span.style))
                 .collect();
             Line::from(spans)
         })
