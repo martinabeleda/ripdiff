@@ -16,6 +16,10 @@ A terminal UI for navigating git diffs, designed for a tmux panel workflow where
 
 Uses [difftastic](https://difftastic.wilfred.me/) for structural, syntax-aware diffs with ANSI color output. Falls back to plain `git diff` if difft is not installed.
 
+## Maintainer Note
+
+TODO: Replace the current local `difftastic` fork/dependency arrangement with a dedicated fork repository and point Cargo at that remote instead of local checked-in code.
+
 ## Install
 
 ```

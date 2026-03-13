@@ -17,6 +17,7 @@ clap = { version = "4", features = ["derive"] }
 ansi-to-tui = "7"
 anyhow = "1"
 unicode-width = "0.2"
+tempfile = "3"
+difftastic = { git = "file:///home/mabeleda/Development/ripdiff/vendor/difftastic", rev = "038f2c5cc15b1f657cd0cc072633a3b6c43af9eb" }
 
 [dev-dependencies]
-tempfile = "3"
