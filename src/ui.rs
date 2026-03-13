@@ -40,7 +40,7 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
             Panel::Diff => "diff",
         };
         format!(
-            "  ripdiff  [repo: {repo_name}]  {changed} file{} changed  mode: {mode_label}  panel: {panel_label}  │  Tab/h/l:panel  j/k:nav  []:hunk  t:mode  r:refresh  q:quit",
+            "  ripdiff  [repo: {repo_name}]  {changed} file{} changed  mode: {mode_label}  panel: {panel_label}  │  Tab/h/l:panel  j/k:nav  gg/G:top/bottom  []:hunk  <Space>e:sidebar  t:mode  r:refresh  q:quit",
             if changed == 1 { "" } else { "s" },
         )
     };
@@ -54,6 +54,11 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_body(frame: &mut Frame, app: &App, area: Rect) {
+    if !app.ui.show_sidebar {
+        render_diff_panel(frame, app, area);
+        return;
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])

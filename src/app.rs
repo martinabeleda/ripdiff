@@ -30,6 +30,9 @@ pub struct UiState {
     pub selected: usize,
     pub diff_cursor: usize,
     pub scroll_offset: usize,
+    pub pending_g: bool,
+    pub pending_space: bool,
+    pub show_sidebar: bool,
     pub hidden_files: HashSet<String>,
     pub diff_mode: DiffMode,
     pub panel_width: u16,
@@ -54,6 +57,9 @@ impl App {
                 selected: 0,
                 diff_cursor: 0,
                 scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
                 panel_width: 80,
@@ -219,6 +225,13 @@ impl App {
         self.reset_diff_position();
     }
 
+    pub fn toggle_sidebar(&mut self) {
+        self.ui.show_sidebar = !self.ui.show_sidebar;
+        if !self.ui.show_sidebar {
+            self.ui.focus = Panel::Diff;
+        }
+    }
+
     pub fn diff_hunk_offsets(&self) -> Vec<usize> {
         let Some(diff) = self.selected_diff() else {
             return vec![];
@@ -274,16 +287,22 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        if self.handle_pending_key_sequence(key) {
+            return;
+        }
+
         match (key.code, key.modifiers) {
             (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Esc, _) => {
                 self.should_quit = true;
                 return;
             }
             (KeyCode::Tab, _) | (KeyCode::BackTab, _) => {
-                self.ui.focus = match self.ui.focus {
-                    Panel::Files => Panel::Diff,
-                    Panel::Diff => Panel::Files,
-                };
+                if self.ui.show_sidebar {
+                    self.ui.focus = match self.ui.focus {
+                        Panel::Files => Panel::Diff,
+                        Panel::Diff => Panel::Files,
+                    };
+                }
                 return;
             }
             (KeyCode::Char('r'), KeyModifiers::NONE) => {
@@ -303,6 +322,53 @@ impl App {
         }
     }
 
+    fn handle_pending_key_sequence(&mut self, key: KeyEvent) -> bool {
+        if self.ui.pending_g {
+            self.ui.pending_g = false;
+            if matches!(
+                (key.code, key.modifiers),
+                (KeyCode::Char('g'), KeyModifiers::NONE)
+            ) {
+                self.jump_to_panel_top();
+                return true;
+            }
+        }
+
+        if self.ui.pending_space {
+            self.ui.pending_space = false;
+            if matches!(
+                (key.code, key.modifiers),
+                (KeyCode::Char('e'), KeyModifiers::NONE)
+                    | (KeyCode::Char('E'), KeyModifiers::SHIFT)
+            ) {
+                self.toggle_sidebar();
+                return true;
+            }
+        }
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('g'), KeyModifiers::NONE) => {
+                self.ui.pending_g = true;
+                true
+            }
+            (KeyCode::Char(' '), KeyModifiers::NONE) => {
+                self.ui.pending_space = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn jump_to_panel_top(&mut self) {
+        match self.ui.focus {
+            Panel::Files => self.jump_top(),
+            Panel::Diff => {
+                self.ui.diff_cursor = 0;
+                self.sync_diff_viewport();
+            }
+        }
+    }
+
     fn handle_files_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => self.move_down(),
@@ -310,9 +376,8 @@ impl App {
             KeyCode::Char('l') | KeyCode::Right => {
                 self.ui.focus = Panel::Diff;
             }
-            KeyCode::Char('g') => self.jump_top(),
             KeyCode::Char('G') => self.jump_bottom(),
-            KeyCode::Char(' ') | KeyCode::Enter => self.toggle_hidden(),
+            KeyCode::Enter => self.toggle_hidden(),
             _ => {}
         }
     }
@@ -323,19 +388,17 @@ impl App {
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => self.scroll_down(1),
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => self.scroll_up(1),
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
-                self.ui.focus = Panel::Files;
+                if self.ui.show_sidebar {
+                    self.ui.focus = Panel::Files;
+                }
             }
             (KeyCode::Char('d'), KeyModifiers::CONTROL) => self.scroll_down(half_page),
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.scroll_up(half_page),
-            (KeyCode::Char('g'), KeyModifiers::NONE) => {
-                self.ui.diff_cursor = 0;
-                self.sync_diff_viewport();
-            }
-            (KeyCode::Char('G'), KeyModifiers::NONE) => {
+            (KeyCode::Char('G'), _) => {
                 self.ui.diff_cursor = self.selected_diff_len().saturating_sub(1);
                 self.sync_diff_viewport();
             }
-            (KeyCode::Char(' '), _) | (KeyCode::Enter, _) => self.toggle_hidden(),
+            (KeyCode::Enter, _) => self.toggle_hidden(),
             (code, _) if is_next_hunk_key(code) => self.jump_next_hunk(),
             (code, _) if is_prev_hunk_key(code) => self.jump_prev_hunk(),
             _ => {}
@@ -482,7 +545,11 @@ pub async fn run<B: Backend>(
         }
 
         let size = terminal.size()?;
-        let right_width = (size.width as f32 * 0.75) as u16;
+        let right_width = if app.ui.show_sidebar {
+            (size.width as f32 * 0.75) as u16
+        } else {
+            size.width
+        };
         let panel_height = size.height.saturating_sub(2);
         if right_width != app.ui.panel_width {
             app.ui.panel_width = right_width;
@@ -537,6 +604,9 @@ mod tests {
                 selected: 0,
                 diff_cursor: 0,
                 scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
                 panel_width: 80,
@@ -583,6 +653,9 @@ mod tests {
                 selected: 0,
                 diff_cursor: 0,
                 scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
                 panel_width: 80,
@@ -629,7 +702,7 @@ mod tests {
             }],
         };
         let request = DiffRequest {
-            path: "src/main.rs".to_string(),
+            path: "a.rs".to_string(),
             panel_width: 80,
             mode: DiffMode::Inline,
         };
@@ -640,6 +713,9 @@ mod tests {
                 selected: 0,
                 diff_cursor: 0,
                 scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
                 panel_width: 80,
@@ -693,6 +769,9 @@ mod tests {
                 selected: 0,
                 diff_cursor: 0,
                 scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
                 panel_width: 80,
@@ -750,6 +829,9 @@ mod tests {
                 selected: 0,
                 diff_cursor: 0,
                 scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
                 panel_width: 80,
@@ -787,6 +869,149 @@ mod tests {
     }
 
     #[test]
+    fn handle_key_uses_gg_and_g_for_navigation() {
+        let request = DiffRequest {
+            path: "a.rs".to_string(),
+            panel_width: 80,
+            mode: DiffMode::Inline,
+        };
+        let mut app = App {
+            repo_root: PathBuf::from("."),
+            snapshot: RepoSnapshot {
+                files: vec![
+                    FileStat {
+                        path: "a.rs".to_string(),
+                        additions: 1,
+                        deletions: 0,
+                        status: FileStatus::Modified,
+                        content_signature: None,
+                    },
+                    FileStat {
+                        path: "b.rs".to_string(),
+                        additions: 1,
+                        deletions: 0,
+                        status: FileStatus::Modified,
+                        content_signature: None,
+                    },
+                    FileStat {
+                        path: "c.rs".to_string(),
+                        additions: 1,
+                        deletions: 0,
+                        status: FileStatus::Modified,
+                        content_signature: None,
+                    },
+                ],
+            },
+            ui: UiState {
+                selected: 1,
+                diff_cursor: 2,
+                scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_sidebar: true,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 3,
+                focus: Panel::Files,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::from([(
+                    request,
+                    DiffContent {
+                        lines: vec![
+                            Line::from("1"),
+                            Line::from("2"),
+                            Line::from("3"),
+                            Line::from("4"),
+                            Line::from("5"),
+                        ],
+                    },
+                )]),
+                loading: HashSet::new(),
+            },
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        };
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+        assert_eq!(app.ui.selected, 2);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert_eq!(app.ui.selected, 2);
+        assert!(app.ui.pending_g);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert_eq!(app.ui.selected, 0);
+        assert!(!app.ui.pending_g);
+
+        app.ui.focus = Panel::Diff;
+        app.ui.diff_cursor = 2;
+        app.ui.scroll_offset = 2;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+        assert_eq!(app.ui.diff_cursor, 4);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert!(app.ui.pending_g);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        assert_eq!(app.ui.diff_cursor, 0);
+        assert_eq!(app.ui.scroll_offset, 0);
+        assert!(!app.ui.pending_g);
+    }
+
+    #[test]
+    fn handle_key_toggles_sidebar_with_space_e() {
+        let mut app = App {
+            repo_root: PathBuf::from("."),
+            snapshot: RepoSnapshot {
+                files: vec![FileStat {
+                    path: "src/main.rs".to_string(),
+                    additions: 1,
+                    deletions: 0,
+                    status: FileStatus::Modified,
+                    content_signature: None,
+                }],
+            },
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_sidebar: true,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::new(),
+                loading: HashSet::new(),
+            },
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        };
+
+        app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert!(app.ui.pending_space);
+        assert!(app.ui.show_sidebar);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT));
+        assert!(!app.ui.pending_space);
+        assert!(!app.ui.show_sidebar);
+        assert_eq!(app.ui.focus, Panel::Diff);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(app.ui.show_sidebar);
+    }
+
+    #[test]
     fn diff_hunk_offsets_fall_back_to_change_blocks_for_difft_output() {
         let request = DiffRequest {
             path: "src/main.rs".to_string(),
@@ -808,6 +1033,9 @@ mod tests {
                 selected: 0,
                 diff_cursor: 0,
                 scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_sidebar: true,
                 hidden_files: HashSet::new(),
                 diff_mode: DiffMode::Inline,
                 panel_width: 80,

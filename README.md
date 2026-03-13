@@ -62,8 +62,9 @@ ripdiff --path /some/repo
 | `j` / `↓` | Move file selection down |
 | `k` / `↑` | Move file selection up |
 | `l` / `→` | Switch to diff panel |
-| `g` / `G` | Jump to top / bottom of file list |
-| `Space` / `Enter` | Toggle diff visibility for selected file |
+| `gg` / `G` | Jump to top / bottom of file list |
+| `Space e` | Hide / show file list sidebar |
+| `Enter` | Toggle diff visibility for selected file |
 
 ### Diff Panel
 
@@ -73,9 +74,10 @@ ripdiff --path /some/repo
 | `k` / `↑` | Scroll up one line |
 | `h` / `←` | Switch to file list |
 | `Ctrl-d` / `Ctrl-u` | Scroll half page down / up |
-| `g` / `G` | Jump to top / bottom of diff |
+| `gg` / `G` | Jump to top / bottom of diff |
 | `]` / `[` | Jump to next / previous hunk |
-| `Space` / `Enter` | Toggle diff visibility for selected file |
+| `Space e` | Hide / show file list sidebar |
+| `Enter` | Toggle diff visibility for selected file |
 
 ## Quick Test
 
