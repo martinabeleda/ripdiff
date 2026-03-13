@@ -14,6 +14,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
+use tokio::sync::watch;
 
 #[derive(Parser, Debug)]
 #[command(name = "ripdiff", about = "Terminal UI for navigating git diffs")]
@@ -38,10 +39,11 @@ async fn main() -> Result<()> {
     let watch_paths = vec![git_dir.join("index"), git_dir.join("COMMIT_EDITMSG")];
 
     let (tx, rx) = mpsc::unbounded_channel();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    let event_task = event::spawn_event_producer(tx.clone());
-    let tick_task = event::spawn_tick_producer(tx.clone());
-    let watcher_task = event::spawn_watcher(tx, watch_paths);
+    let event_task = event::spawn_event_producer(tx.clone(), shutdown_rx.clone());
+    let tick_task = event::spawn_tick_producer(tx.clone(), shutdown_rx.clone());
+    let watcher_task = event::spawn_watcher(tx, watch_paths, shutdown_rx);
 
     // Terminal setup
     enable_raw_mode()?;
@@ -60,9 +62,10 @@ async fn main() -> Result<()> {
 
     let result = app::run(&mut terminal, app, rx).await;
 
-    event_task.abort();
-    tick_task.abort();
-    watcher_task.abort();
+    let _ = shutdown_tx.send(true);
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(300), event_task).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(300), tick_task).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(300), watcher_task).await;
 
     // Cleanup
     disable_raw_mode()?;

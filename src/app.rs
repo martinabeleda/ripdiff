@@ -3,10 +3,9 @@ use crate::event::Event;
 use crate::git::{list_changed_files, repo_root, FileStat, FileStatus};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::Backend;
 use ratatui::Terminal;
 use std::collections::{HashMap, HashSet};
-use std::io::Stdout;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -303,12 +302,16 @@ impl App {
     }
 }
 
-pub async fn run(
-    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+pub async fn run<B: Backend>(
+    terminal: &mut Terminal<B>,
     mut app: App,
     mut rx: mpsc::UnboundedReceiver<Event>,
 ) -> Result<()> {
     loop {
+        if app.should_quit {
+            break;
+        }
+
         // Update panel width based on terminal size
         let size = terminal.size()?;
         let right_width = (size.width as f32 * 0.75) as u16;
@@ -324,12 +327,13 @@ pub async fn run(
 
         terminal.draw(|frame| crate::ui::render(frame, &mut app))?;
 
-        if app.should_quit {
-            break;
-        }
-
         match rx.recv().await {
-            Some(Event::Key(key)) => app.handle_key(key),
+            Some(Event::Key(key)) => {
+                app.handle_key(key);
+                if app.should_quit {
+                    break;
+                }
+            }
             Some(Event::Resize) => {
                 app.diff_cache.clear();
             }
@@ -340,4 +344,45 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    #[tokio::test]
+    async fn run_exits_when_q_is_pressed() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        tx.send(Event::Key(KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+        )))
+        .expect("q event should enqueue");
+
+        let app = App {
+            repo_root: PathBuf::from("."),
+            files: Vec::new(),
+            selected: 0,
+            scroll_offset: 0,
+            diff_cache: HashMap::new(),
+            hidden_files: HashSet::new(),
+            diff_mode: DiffMode::Inline,
+            panel_width: 80,
+            panel_height: 40,
+            focus: Panel::Files,
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        };
+
+        let result =
+            tokio::time::timeout(Duration::from_millis(250), run(&mut terminal, app, rx)).await;
+
+        assert!(result.is_ok(), "run loop should exit after q");
+        assert!(result.unwrap().is_ok(), "run loop should exit cleanly");
+    }
 }
