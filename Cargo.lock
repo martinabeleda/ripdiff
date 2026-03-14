@@ -318,97 +318,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "difftastic"
-version = "0.68.0"
-source = "git+https://github.com/martinabeleda/difftastic.git?rev=008ffe865b1b1cf995abf86af456c8e5b44c8119#008ffe865b1b1cf995abf86af456c8e5b44c8119"
-dependencies = [
- "bumpalo",
- "cc",
- "clap",
- "crossterm",
- "encoding_rs",
- "glob",
- "hashbrown 0.14.5",
- "humansize",
- "ignore",
- "lazy_static",
- "libc",
- "line-numbers",
- "log",
- "owo-colors",
- "pretty_env_logger",
- "radix-heap",
- "rayon",
- "regex",
- "rustc-hash",
- "serde",
- "serde_json",
- "smallvec",
- "streaming-iterator",
- "strsim",
- "strum",
- "tikv-jemallocator",
- "tree-sitter",
- "tree-sitter-ada",
- "tree-sitter-bash",
- "tree-sitter-c",
- "tree-sitter-c-sharp",
- "tree-sitter-clojure-orchard",
- "tree-sitter-cmake",
- "tree-sitter-cpp",
- "tree-sitter-css",
- "tree-sitter-dart-orchard",
- "tree-sitter-devicetree",
- "tree-sitter-elisp",
- "tree-sitter-elixir",
- "tree-sitter-elm",
- "tree-sitter-erlang",
- "tree-sitter-fortran",
- "tree-sitter-fsharp",
- "tree-sitter-gleam",
- "tree-sitter-go",
- "tree-sitter-haskell",
- "tree-sitter-hcl",
- "tree-sitter-html",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-json",
- "tree-sitter-julia",
- "tree-sitter-language",
- "tree-sitter-lua",
- "tree-sitter-make",
- "tree-sitter-newick",
- "tree-sitter-nix",
- "tree-sitter-objc",
- "tree-sitter-ocaml",
- "tree-sitter-pascal",
- "tree-sitter-perl",
- "tree-sitter-php",
- "tree-sitter-proto",
- "tree-sitter-python",
- "tree-sitter-qmljs",
- "tree-sitter-r",
- "tree-sitter-racket",
- "tree-sitter-ruby",
- "tree-sitter-rust-orchard",
- "tree-sitter-scala",
- "tree-sitter-scheme",
- "tree-sitter-sequel",
- "tree-sitter-sfapex",
- "tree-sitter-solidity",
- "tree-sitter-swift",
- "tree-sitter-toml-ng",
- "tree-sitter-typescript",
- "tree-sitter-verilog",
- "tree-sitter-xml",
- "tree-sitter-yaml",
- "tree-sitter-zig",
- "tree_magic_mini",
- "typed-arena",
- "unicode-width 0.1.14",
- "version_check",
- "wu-diff",
-]
+name = "diff"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 
 [[package]]
 name = "either"
@@ -941,6 +854,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "pretty_assertions"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
+dependencies = [
+ "diff",
+ "yansi",
+]
+
+[[package]]
 name = "pretty_env_logger"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1084,14 +1007,97 @@ version = "0.1.2"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
+ "bumpalo",
+ "cc",
  "clap",
  "crossterm",
- "difftastic",
+ "encoding_rs",
+ "glob",
+ "hashbrown 0.14.5",
+ "humansize",
+ "ignore",
+ "lazy_static",
+ "libc",
+ "line-numbers",
+ "log",
  "notify",
+ "owo-colors",
+ "pretty_assertions",
+ "pretty_env_logger",
+ "radix-heap",
  "ratatui",
+ "rayon",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "streaming-iterator",
+ "strsim",
+ "strum",
  "tempfile",
+ "tikv-jemallocator",
  "tokio",
+ "tree-sitter",
+ "tree-sitter-ada",
+ "tree-sitter-bash",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-clojure-orchard",
+ "tree-sitter-cmake",
+ "tree-sitter-cpp",
+ "tree-sitter-css",
+ "tree-sitter-dart-orchard",
+ "tree-sitter-devicetree",
+ "tree-sitter-elisp",
+ "tree-sitter-elixir",
+ "tree-sitter-elm",
+ "tree-sitter-erlang",
+ "tree-sitter-fortran",
+ "tree-sitter-fsharp",
+ "tree-sitter-gleam",
+ "tree-sitter-go",
+ "tree-sitter-haskell",
+ "tree-sitter-hcl",
+ "tree-sitter-html",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-julia",
+ "tree-sitter-language",
+ "tree-sitter-lua",
+ "tree-sitter-make",
+ "tree-sitter-newick",
+ "tree-sitter-nix",
+ "tree-sitter-objc",
+ "tree-sitter-ocaml",
+ "tree-sitter-pascal",
+ "tree-sitter-perl",
+ "tree-sitter-php",
+ "tree-sitter-proto",
+ "tree-sitter-python",
+ "tree-sitter-qmljs",
+ "tree-sitter-r",
+ "tree-sitter-racket",
+ "tree-sitter-ruby",
+ "tree-sitter-rust-orchard",
+ "tree-sitter-scala",
+ "tree-sitter-scheme",
+ "tree-sitter-sequel",
+ "tree-sitter-sfapex",
+ "tree-sitter-solidity",
+ "tree-sitter-swift",
+ "tree-sitter-toml-ng",
+ "tree-sitter-typescript",
+ "tree-sitter-verilog",
+ "tree-sitter-xml",
+ "tree-sitter-yaml",
+ "tree-sitter-zig",
+ "tree_magic_mini",
+ "typed-arena",
  "unicode-width 0.2.0",
+ "version_check",
+ "wu-diff",
 ]
 
 [[package]]
@@ -2454,6 +2460,12 @@ name = "wu-diff"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e3e6735fcde06432870db8dc9d7e3ab1b93727c14eaef329969426299f28893"
+
+[[package]]
+name = "yansi"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "zerocopy"
