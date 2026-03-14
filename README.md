@@ -14,7 +14,7 @@
 
 A terminal UI for navigating git diffs, designed for a tmux panel workflow where you monitor AI agent changes on one side while working on the other.
 
-Uses [difftastic](https://difftastic.wilfred.me/) for structural, syntax-aware diffs with ANSI color output. Falls back to plain `git diff` if difft is not installed.
+Uses [difftastic](https://difftastic.wilfred.me/) for structural, syntax-aware diffs with ANSI color output via an in-process Rust dependency.
 
 ## Install
 
@@ -23,12 +23,6 @@ cargo install --path .
 ```
 
 This puts `ripdiff` in `~/.cargo/bin/`.
-
-For best results, install difftastic:
-
-```
-cargo install difftastic
-```
 
 ## Usage
 

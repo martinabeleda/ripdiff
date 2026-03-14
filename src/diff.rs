@@ -1,9 +1,12 @@
 use crate::event::Event;
 use crate::git::repo_has_head;
 use anyhow::{Context, Result};
+use difftastic::{render_diff_from_paths, RenderDisplayMode, RenderOptions};
 use ratatui::text::{Line, Text};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tempfile::TempDir;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -13,13 +16,6 @@ pub enum DiffMode {
 }
 
 impl DiffMode {
-    pub fn as_dft_display(&self) -> &'static str {
-        match self {
-            DiffMode::Inline => "inline",
-            DiffMode::SideBySide => "side-by-side-show-both",
-        }
-    }
-
     pub fn label(&self) -> &'static str {
         match self {
             DiffMode::Inline => "inline",
@@ -78,7 +74,6 @@ impl DiffService {
 }
 
 /// Fetch diff for a single file using difftastic as GIT_EXTERNAL_DIFF.
-/// Falls back to plain `git diff` if difft is not available.
 /// For untracked files, shows full file content as new.
 pub fn fetch_diff(
     repo_root: &Path,
@@ -92,11 +87,7 @@ pub fn fetch_diff(
     }
 
     let has_head = repo_has_head(repo_root)?;
-
-    let output_bytes = match try_difft(repo_root, file_path, panel_width, mode, has_head) {
-        Ok(bytes) if !bytes.is_empty() => bytes,
-        _ => plain_git_diff(repo_root, file_path, has_head)?,
-    };
+    let output_bytes = render_tracked_diff(repo_root, file_path, panel_width, mode, has_head)?;
 
     parse_ansi_to_lines(&output_bytes)
 }
@@ -131,60 +122,22 @@ fn show_new_file(repo_root: &Path, file_path: &str) -> Result<DiffContent> {
     Ok(DiffContent { lines })
 }
 
-fn try_difft(
+fn render_tracked_diff(
     repo_root: &Path,
     file_path: &str,
     panel_width: u16,
     mode: &DiffMode,
     has_head: bool,
 ) -> Result<Vec<u8>> {
-    collect_diff_output(repo_root, file_path, has_head, |command| {
-        command
-            .env("GIT_EXTERNAL_DIFF", "difft")
-            .env("DFT_COLOR", "always")
-            .env("DFT_DISPLAY", mode.as_dft_display())
-            .env("DFT_WIDTH", panel_width.to_string());
-    })
-    .context("Failed to run git with difft")
-}
-
-fn plain_git_diff(repo_root: &Path, file_path: &str, has_head: bool) -> Result<Vec<u8>> {
-    collect_diff_output(repo_root, file_path, has_head, |command| {
-        command.arg("--color=always");
-    })
-    .context("Failed to run git diff")
-}
-
-fn collect_diff_output<F>(
-    repo_root: &Path,
-    file_path: &str,
-    has_head: bool,
-    configure: F,
-) -> Result<Vec<u8>>
-where
-    F: Fn(&mut Command),
-{
+    let mut output = Vec::new();
     let diff_specs = if has_head {
-        vec![DiffSpec {
-            staged: false,
-            against_head: true,
-        }]
+        vec![DiffSpec::HeadToWorktree]
     } else {
-        vec![
-            DiffSpec {
-                staged: true,
-                against_head: false,
-            },
-            DiffSpec {
-                staged: false,
-                against_head: false,
-            },
-        ]
+        vec![DiffSpec::EmptyToIndex, DiffSpec::IndexToWorktree]
     };
 
-    let mut output = Vec::new();
     for spec in diff_specs {
-        let chunk = run_git_diff(repo_root, file_path, &spec, &configure)?;
+        let chunk = render_diff_spec(repo_root, file_path, panel_width, mode, spec)?;
         if chunk.is_empty() {
             continue;
         }
@@ -198,38 +151,108 @@ where
 }
 
 #[derive(Clone, Copy)]
-struct DiffSpec {
-    staged: bool,
-    against_head: bool,
+enum DiffSpec {
+    HeadToWorktree,
+    EmptyToIndex,
+    IndexToWorktree,
 }
 
-fn run_git_diff<F>(
+fn render_diff_spec(
     repo_root: &Path,
     file_path: &str,
-    spec: &DiffSpec,
-    configure: &F,
-) -> Result<Vec<u8>>
-where
-    F: Fn(&mut Command),
-{
-    let mut command = Command::new("git");
-    command.current_dir(repo_root);
-    command.arg("diff");
-    if spec.staged {
-        command.arg("--cached");
-    }
-    if spec.against_head {
-        command.arg("HEAD");
-    }
-    configure(&mut command);
-    command.args(["--", file_path]);
+    panel_width: u16,
+    mode: &DiffMode,
+    spec: DiffSpec,
+) -> Result<Vec<u8>> {
+    let (lhs, rhs) = match spec {
+        DiffSpec::HeadToWorktree => (
+            git_revision_bytes(repo_root, "HEAD", file_path)?,
+            worktree_bytes(repo_root, file_path)?,
+        ),
+        DiffSpec::EmptyToIndex => (None, git_index_bytes(repo_root, file_path)?),
+        DiffSpec::IndexToWorktree => (
+            git_index_bytes(repo_root, file_path)?,
+            worktree_bytes(repo_root, file_path)?,
+        ),
+    };
 
-    let output = command.output()?;
-    if output.status.success() {
-        Ok(output.stdout)
-    } else {
-        Ok(Vec::new())
+    if lhs == rhs {
+        return Ok(Vec::new());
     }
+
+    let scratch = TempDir::new().context("Failed to create scratch directory for difftastic")?;
+    let lhs_path = write_snapshot(&scratch, "lhs", file_path, lhs.as_deref())?;
+    let rhs_path = write_snapshot(&scratch, "rhs", file_path, rhs.as_deref())?;
+
+    let rendered = render_diff_from_paths(
+        file_path,
+        lhs_path.as_deref(),
+        rhs_path.as_deref(),
+        RenderOptions {
+            display_mode: match mode {
+                DiffMode::Inline => RenderDisplayMode::Inline,
+                DiffMode::SideBySide => RenderDisplayMode::SideBySide,
+            },
+            terminal_width: usize::from(panel_width),
+        },
+    );
+
+    Ok(rendered.into_bytes())
+}
+
+fn git_revision_bytes(
+    repo_root: &Path,
+    revision: &str,
+    file_path: &str,
+) -> Result<Option<Vec<u8>>> {
+    git_object_bytes(repo_root, &format!("{revision}:{file_path}"))
+}
+
+fn git_index_bytes(repo_root: &Path, file_path: &str) -> Result<Option<Vec<u8>>> {
+    git_object_bytes(repo_root, &format!(":{file_path}"))
+}
+
+fn git_object_bytes(repo_root: &Path, spec: &str) -> Result<Option<Vec<u8>>> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["show", spec])
+        .output()
+        .with_context(|| format!("Failed to run git show {spec}"))?;
+
+    if output.status.success() {
+        Ok(Some(output.stdout))
+    } else {
+        Ok(None)
+    }
+}
+
+fn worktree_bytes(repo_root: &Path, file_path: &str) -> Result<Option<Vec<u8>>> {
+    let path = repo_root.join(file_path);
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).context("Failed to read worktree file"),
+    }
+}
+
+fn write_snapshot(
+    scratch: &TempDir,
+    side: &str,
+    display_path: &str,
+    bytes: Option<&[u8]>,
+) -> Result<Option<PathBuf>> {
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+
+    let file_name = Path::new(display_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("file");
+    let path = scratch.path().join(format!("{side}-{file_name}"));
+    fs::write(&path, bytes).with_context(|| format!("Failed to write {side} snapshot"))?;
+    Ok(Some(path))
 }
 
 fn parse_ansi_to_lines(bytes: &[u8]) -> Result<DiffContent> {
