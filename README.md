@@ -14,7 +14,7 @@
 
 A terminal UI for watching and reviewing agent progress, designed for a tmux panel workflow where you monitor agent changes on one side while working on the other.
 
-Uses [difftastic](https://difftastic.wilfred.me/) for structural, syntax-aware diffs with ANSI color output. Falls back to plain `git diff` if difft is not installed.
+Uses [difftastic](https://difftastic.wilfred.me/) for structural, syntax-aware diffs with ANSI color output via an in-process Rust dependency.
 
 ## Install
 
