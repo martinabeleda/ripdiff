@@ -2,17 +2,24 @@
 name = "ripdiff"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85"
 default-run = "ripdiff"
-description = "Terminal UI for navigating git diffs with optional difftastic integration"
+description = "Terminal UI for watching and reviewing agent progress"
 license = "MIT"
 repository = "https://github.com/martinabeleda/ripdiff"
+homepage = "https://github.com/martinabeleda/ripdiff"
+documentation = "https://docs.rs/ripdiff"
 readme = "README.md"
-keywords = ["git", "diff", "tui", "terminal", "difftastic"]
+keywords = ["git", "diff", "tui", "review", "agent"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = [".github/"]
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE"]
 
 [[bin]]
 name = "ripdiff"
+path = "src/main.rs"
+
+[[bin]]
+name = "rd"
 path = "src/main.rs"
 
 [dependencies]
