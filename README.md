@@ -12,17 +12,35 @@
                 ░░░░░
 ```
 
-A terminal UI for navigating git diffs, designed for a tmux panel workflow where you monitor AI agent changes on one side while working on the other.
+A terminal UI for watching and reviewing agent progress, designed for a tmux panel workflow where you monitor agent changes on one side while working on the other.
 
 Uses [difftastic](https://difftastic.wilfred.me/) for structural, syntax-aware diffs with ANSI color output via an in-process Rust dependency.
 
 ## Install
 
+### Install from crates.io
+
+```bash
+cargo install ripdiff
 ```
+
+This installs `ripdiff` into `~/.cargo/bin/`.
+
+### Install from source (local checkout)
+
+```bash
 cargo install --path .
 ```
 
-This puts `ripdiff` in `~/.cargo/bin/`.
+For best results, install difftastic:
+
+```bash
+cargo install difftastic
+```
+
+## Releasing
+
+Maintainer release instructions live in [RELEASING.md](/home/mabeleda/Development/ripdiff/RELEASING.md).
 
 ## Usage
 
