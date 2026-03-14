@@ -1,0 +1,12 @@
+allow-branch = ["main"]
+consolidate-commits = true
+
+tag-name = "v{{version}}"
+tag-message = "ripdiff {{version}}"
+
+pre-release-commit-message = "release: {{version}}"
+push-remote = "origin"
+
+publish = false
+push = true
+tag = true

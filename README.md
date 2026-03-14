@@ -38,26 +38,9 @@ For best results, install difftastic:
 cargo install difftastic
 ```
 
-## Publishing and release process
+## Releasing
 
-`ripdiff` follows [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`):
-
-- **PATCH** for bug fixes and internal improvements.
-- **MINOR** for backwards-compatible features.
-- **MAJOR** for breaking changes.
-
-### Maintainer release checklist
-
-1. Bump `version` in `Cargo.toml`.
-2. Ensure CI passes (`cargo fmt`, `cargo clippy`, `cargo test`, `cargo build`).
-3. Commit and tag the release:
-   ```bash
-   git tag vX.Y.Z
-   git push origin vX.Y.Z
-   ```
-4. The GitHub Actions release workflow publishes the crate when a `v*` tag is pushed.
-
-To publish from CI, set a `CARGO_REGISTRY_TOKEN` repository secret with a crates.io API token.
+Maintainer release instructions live in [RELEASING.md](/home/mabeleda/Development/ripdiff/RELEASING.md).
 
 ## Usage
 
