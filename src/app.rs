@@ -1,8 +1,8 @@
 use crate::diff::{DiffContent, DiffMode, DiffRequest, DiffService};
 use crate::event::Event;
 use crate::git::{
-    load_snapshot, repo_root, stage_all, stage_file, unstage_all, unstage_file, FileStat,
-    FileStatus, RepoSnapshot,
+    load_snapshot_with_options, repo_root, stage_all, stage_file, unstage_all, unstage_file,
+    FileStat, FileStatus, RepoSnapshot,
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -21,6 +21,7 @@ pub enum Panel {
 
 pub struct App {
     pub repo_root: PathBuf,
+    pub show_unstaged_only: bool,
     pub snapshot: RepoSnapshot,
     pub ui: UiState,
     pub diff_store: DiffStore,
@@ -50,12 +51,13 @@ pub struct DiffStore {
 }
 
 impl App {
-    pub fn new(start_path: PathBuf) -> Result<Self> {
+    pub fn new(start_path: PathBuf, show_unstaged_only: bool) -> Result<Self> {
         let root = repo_root(&start_path)?;
-        let snapshot = load_snapshot(&root)?;
+        let snapshot = load_snapshot_with_options(&root, show_unstaged_only)?;
 
         Ok(App {
             repo_root: root,
+            show_unstaged_only,
             snapshot,
             ui: UiState {
                 selected: 0,
@@ -87,7 +89,7 @@ impl App {
         }
         self.last_refresh = Instant::now();
 
-        match load_snapshot(&self.repo_root) {
+        match load_snapshot_with_options(&self.repo_root, self.show_unstaged_only) {
             Ok(snapshot) => {
                 let snapshot_changed = self.snapshot != snapshot;
                 self.apply_snapshot(snapshot);
@@ -158,7 +160,7 @@ impl App {
         }
 
         self.diff_store.loading.insert(request.clone());
-        service.request(request, is_untracked);
+        service.request(request, is_untracked, self.show_unstaged_only);
     }
 
     pub fn handle_loaded_diff(
@@ -228,6 +230,13 @@ impl App {
         self.diff_store.cache.clear();
         self.diff_store.loading.clear();
         self.reset_diff_position();
+    }
+
+    pub fn toggle_unstaged_only(&mut self) {
+        self.show_unstaged_only = !self.show_unstaged_only;
+        self.diff_store.cache.clear();
+        self.diff_store.loading.clear();
+        self.force_refresh();
     }
 
     pub fn toggle_sidebar(&mut self) {
@@ -366,6 +375,10 @@ impl App {
             }
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
                 self.toggle_diff_mode();
+                return;
+            }
+            (KeyCode::Char('u'), KeyModifiers::NONE) => {
+                self.toggle_unstaged_only();
                 return;
             }
             (KeyCode::Char('h'), KeyModifiers::NONE)
@@ -669,6 +682,7 @@ mod tests {
 
         let app = App {
             repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
             snapshot: RepoSnapshot::default(),
             ui: UiState {
                 selected: 0,
@@ -711,6 +725,7 @@ mod tests {
     fn refresh_invalidates_cached_diffs() {
         let mut app = App {
             repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
                 files: vec![FileStat {
@@ -786,6 +801,7 @@ mod tests {
         };
         let mut app = App {
             repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
             snapshot: snapshot.clone(),
             ui: UiState {
                 selected: 0,
@@ -835,6 +851,7 @@ mod tests {
         };
         let mut app = App {
             repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
                 files: vec![FileStat {
@@ -899,6 +916,7 @@ mod tests {
         };
         let mut app = App {
             repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
                 files: vec![FileStat {
@@ -964,6 +982,7 @@ mod tests {
         };
         let mut app = App {
             repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
                 files: vec![
@@ -1061,6 +1080,7 @@ mod tests {
     fn handle_key_toggles_sidebar_with_space_e() {
         let mut app = App {
             repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
                 files: vec![FileStat {
@@ -1114,6 +1134,7 @@ mod tests {
     fn handle_key_toggles_help_overlay_with_h() {
         let mut app = App {
             repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
                 files: vec![],
@@ -1149,9 +1170,70 @@ mod tests {
     }
 
     #[test]
+    fn handle_key_toggles_unstaged_only_scope() {
+        let mut app = App {
+            repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
+            snapshot: RepoSnapshot {
+                branch: None,
+                files: vec![FileStat {
+                    path: "tracked.txt".to_string(),
+                    additions: 1,
+                    deletions: 0,
+                    status: FileStatus::Modified,
+                    has_staged_changes: true,
+                    has_unstaged_changes: true,
+                    content_signature: None,
+                }],
+            },
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_help: false,
+                show_sidebar: true,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::from([(
+                    DiffRequest {
+                        path: "tracked.txt".to_string(),
+                        panel_width: 80,
+                        mode: DiffMode::Inline,
+                    },
+                    DiffContent {
+                        lines: vec![Line::from("stale")],
+                    },
+                )]),
+                loading: HashSet::from([DiffRequest {
+                    path: "tracked.txt".to_string(),
+                    panel_width: 80,
+                    mode: DiffMode::Inline,
+                }]),
+            },
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        };
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+
+        assert!(app.show_unstaged_only);
+        assert!(app.diff_store.cache.is_empty());
+        assert!(app.diff_store.loading.is_empty());
+    }
+
+    #[test]
     fn toggle_all_files_staged_prefers_staging_partial_changes() {
         let app = App {
             repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
                 files: vec![FileStat {
@@ -1203,6 +1285,7 @@ mod tests {
         };
         let app = App {
             repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
                 files: vec![FileStat {

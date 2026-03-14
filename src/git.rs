@@ -135,6 +135,13 @@ pub fn repo_has_head(repo_root: &Path) -> Result<bool> {
 }
 
 pub fn load_snapshot(repo_root: &Path) -> Result<RepoSnapshot> {
+    load_snapshot_with_options(repo_root, false)
+}
+
+pub fn load_snapshot_with_options(
+    repo_root: &Path,
+    show_unstaged_only: bool,
+) -> Result<RepoSnapshot> {
     let branch = current_branch(repo_root)?;
     let mut files = parse_status_porcelain(repo_root)?;
     let mut stats = parse_numstat(repo_root, true)?;
@@ -152,6 +159,13 @@ pub fn load_snapshot(repo_root: &Path) -> Result<RepoSnapshot> {
         } else if file.status == FileStatus::Untracked {
             file.additions = count_lines(repo_root.join(&file.path));
         }
+    }
+
+    if show_unstaged_only {
+        files.retain(|file| file.has_unstaged_changes);
+    }
+
+    for file in &mut files {
         file.content_signature = file_content_signature(repo_root.join(&file.path));
     }
 
@@ -587,6 +601,32 @@ mod tests {
         assert_eq!(files[0].path, "tracked.txt");
         assert!(files[0].has_staged_changes);
         assert!(files[0].has_unstaged_changes);
+    }
+
+    #[test]
+    fn load_snapshot_with_options_filters_out_staged_only_files() {
+        let temp = init_repo();
+        fs::write(temp.path().join("staged.txt"), "before\n").expect("fixture should be written");
+        fs::write(temp.path().join("mixed.txt"), "before\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", "staged.txt", "mixed.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        fs::write(temp.path().join("staged.txt"), "after\n")
+            .expect("staged edit should be written");
+        run_git(temp.path(), &["add", "staged.txt"]);
+
+        fs::write(temp.path().join("mixed.txt"), "staged\n")
+            .expect("staged edit should be written");
+        run_git(temp.path(), &["add", "mixed.txt"]);
+        fs::write(temp.path().join("mixed.txt"), "staged\nunstaged\n")
+            .expect("unstaged edit should be written");
+
+        let snapshot = load_snapshot_with_options(temp.path(), true).expect("snapshot should load");
+
+        assert_eq!(snapshot.files.len(), 1);
+        assert_eq!(snapshot.files[0].path, "mixed.txt");
+        assert!(snapshot.files[0].has_staged_changes);
+        assert!(snapshot.files[0].has_unstaged_changes);
     }
 
     #[test]

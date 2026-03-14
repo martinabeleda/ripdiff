@@ -54,17 +54,18 @@ impl DiffService {
         Self { repo_root, tx }
     }
 
-    pub fn request(&self, request: DiffRequest, is_untracked: bool) {
+    pub fn request(&self, request: DiffRequest, is_untracked: bool, show_unstaged_only: bool) {
         let repo_root = self.repo_root.clone();
         let tx = self.tx.clone();
 
         tokio::task::spawn_blocking(move || {
-            let result = fetch_diff(
+            let result = fetch_diff_with_options(
                 &repo_root,
                 &request.path,
                 request.panel_width,
                 &request.mode,
                 is_untracked,
+                show_unstaged_only,
             )
             .map_err(|err| err.to_string());
 
@@ -75,6 +76,7 @@ impl DiffService {
 
 /// Fetch diff for a single file using difftastic as GIT_EXTERNAL_DIFF.
 /// For untracked files, shows full file content as new.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn fetch_diff(
     repo_root: &Path,
     file_path: &str,
@@ -82,12 +84,30 @@ pub fn fetch_diff(
     mode: &DiffMode,
     is_untracked: bool,
 ) -> Result<DiffContent> {
+    fetch_diff_with_options(repo_root, file_path, panel_width, mode, is_untracked, false)
+}
+
+pub fn fetch_diff_with_options(
+    repo_root: &Path,
+    file_path: &str,
+    panel_width: u16,
+    mode: &DiffMode,
+    is_untracked: bool,
+    show_unstaged_only: bool,
+) -> Result<DiffContent> {
     if is_untracked {
         return show_new_file(repo_root, file_path);
     }
 
     let has_head = repo_has_head(repo_root)?;
-    let output_bytes = render_tracked_diff(repo_root, file_path, panel_width, mode, has_head)?;
+    let output_bytes = render_tracked_diff(
+        repo_root,
+        file_path,
+        panel_width,
+        mode,
+        has_head,
+        show_unstaged_only,
+    )?;
 
     parse_ansi_to_lines(&output_bytes)
 }
@@ -128,9 +148,12 @@ fn render_tracked_diff(
     panel_width: u16,
     mode: &DiffMode,
     has_head: bool,
+    show_unstaged_only: bool,
 ) -> Result<Vec<u8>> {
     let mut output = Vec::new();
-    let diff_specs = if has_head {
+    let diff_specs = if show_unstaged_only {
+        vec![DiffSpec::IndexToWorktree]
+    } else if has_head {
         vec![DiffSpec::HeadToWorktree]
     } else {
         vec![DiffSpec::EmptyToIndex, DiffSpec::IndexToWorktree]
@@ -324,6 +347,79 @@ mod tests {
         assert!(
             rendered.contains("hello"),
             "expected diff to include staged content, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn fetch_diff_with_options_omits_staged_hunks_when_showing_unstaged_only() {
+        let temp = init_repo();
+        fs::write(temp.path().join("tracked.txt"), "base\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git(
+            temp.path(),
+            &[
+                "-c",
+                "user.name=Test User",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-qm",
+                "init",
+            ],
+        );
+
+        fs::write(temp.path().join("tracked.txt"), "staged\n")
+            .expect("staged edit should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        fs::write(temp.path().join("tracked.txt"), "staged\nunstaged\n")
+            .expect("unstaged edit should be written");
+
+        let full = fetch_diff_with_options(
+            temp.path(),
+            "tracked.txt",
+            80,
+            &DiffMode::Inline,
+            false,
+            false,
+        )
+        .expect("full diff should load");
+        let unstaged_only = fetch_diff_with_options(
+            temp.path(),
+            "tracked.txt",
+            80,
+            &DiffMode::Inline,
+            false,
+            true,
+        )
+        .expect("unstaged-only diff should load");
+
+        let render = |diff: DiffContent| {
+            diff.lines
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let full_rendered = render(full);
+        let unstaged_rendered = render(unstaged_only);
+
+        assert!(
+            full_rendered.contains("base"),
+            "expected full diff to include staged hunk context, got: {full_rendered}"
+        );
+        assert!(
+            unstaged_rendered.contains("unstaged"),
+            "expected unstaged-only diff to include worktree hunk, got: {unstaged_rendered}"
+        );
+        assert!(
+            !unstaged_rendered.contains("base"),
+            "expected unstaged-only diff to omit staged hunk, got: {unstaged_rendered}"
         );
     }
 }

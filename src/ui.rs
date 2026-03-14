@@ -37,6 +37,11 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
     let mode_label = app.ui.diff_mode.label();
     let branch = app.snapshot.branch.as_deref().unwrap_or("detached");
     let branch_icon = "\u{e0a0}";
+    let change_scope = if app.show_unstaged_only {
+        "unstaged-only"
+    } else {
+        "all changes"
+    };
 
     let title_text = if let Some(error) = &app.error_message {
         format!("  ripdiff  [{repo_name}]  ERROR: {error}  ")
@@ -46,7 +51,7 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
             Panel::Diff => "diff",
         };
         format!(
-            "  ripdiff  [repo: {repo_name}  {branch_icon} {branch}]  {changed} file{} changed  mode: {mode_label}  panel: {panel_label}  │  Tab:panel  t:mode  r:refresh  h:help  q:quit",
+            "  ripdiff  [repo: {repo_name}  {branch_icon} {branch}]  {changed} file{} changed  mode: {mode_label}  scope: {change_scope}  panel: {panel_label}  │  Tab:panel  t:mode  u:scope  r:refresh  h:help  q:quit",
             if changed == 1 { "" } else { "s" },
         )
     };
@@ -74,6 +79,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  Space e          Hide or show the file sidebar"),
         Line::from("  Enter            Hide or show the selected file diff"),
         Line::from("  t                Toggle diff mode"),
+        Line::from("  u                Toggle all changes / unstaged-only scope"),
         Line::from("  r                Refresh"),
         Line::from("  h / ? / Esc      Close this help"),
         Line::from("  q                Quit"),

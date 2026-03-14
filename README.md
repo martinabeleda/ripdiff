@@ -55,6 +55,15 @@ Or point it at a specific repo:
 ripdiff /some/repo
 ```
 
+Show only unstaged changes:
+
+```
+ripdiff -u
+
+# or
+ripdiff --unstaged-only
+```
+
 ## Key Bindings
 
 ### Global
@@ -64,6 +73,7 @@ ripdiff /some/repo
 | `Tab` / `Shift-Tab` | Toggle focus between panels |
 | `h` / `?` | Open or close help |
 | `t` | Toggle between inline and side-by-side diff |
+| `u` | Toggle between all changes and unstaged-only changes |
 | `r` | Force refresh |
 | `q` / `Esc` | Quit |
 
