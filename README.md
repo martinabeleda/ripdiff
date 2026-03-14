@@ -16,6 +16,8 @@ A terminal UI for watching and reviewing agent progress, designed for a tmux pan
 
 Uses [difftastic](https://difftastic.wilfred.me/) for structural, syntax-aware diffs with ANSI color output via an in-process Rust dependency.
 
+![ripdiff demo](docs/media/strava-demo.gif)
+
 ## Install
 
 ### Install from crates.io
@@ -32,12 +34,6 @@ This installs `ripdiff` into `~/.cargo/bin/`.
 cargo install --path .
 ```
 
-For best results, install difftastic:
-
-```bash
-cargo install difftastic
-```
-
 ## Releasing
 
 Maintainer release instructions live in [RELEASING.md](/home/mabeleda/Development/ripdiff/RELEASING.md).
@@ -48,6 +44,9 @@ Run inside any git repo with uncommitted changes:
 
 ```
 ripdiff
+
+# or
+rd
 ```
 
 Or point it at a specific repo:
