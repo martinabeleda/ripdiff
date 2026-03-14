@@ -3,6 +3,23 @@ repos:
     hooks:
       - id: cargo-fmt
         name: cargo fmt
-        entry: cargo fmt --all -- --check
+        entry: cargo fmt --all
         language: system
         pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        pass_filenames: false
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --all-targets --all-features
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: cargo-package
+        name: cargo package
+        entry: cargo package --allow-dirty
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
