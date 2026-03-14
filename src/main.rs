@@ -25,6 +25,10 @@ struct Args {
     /// Path to the git repository (defaults to current directory)
     #[arg(value_name = "PATH")]
     path: Option<PathBuf>,
+
+    /// Show only unstaged changes
+    #[arg(short = 'u', long)]
+    unstaged_only: bool,
 }
 
 #[tokio::main]
@@ -35,7 +39,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
     // Build App before touching the terminal so errors are readable
-    let app = App::new(start_path.clone())?;
+    let app = App::new(start_path.clone(), args.unstaged_only)?;
 
     // Watch git index and commit message files for auto-refresh
     let repo_git_dir = git_dir(&app.repo_root)?;
@@ -106,6 +110,21 @@ mod tests {
         let args = Args::parse_from(["ripdiff"]);
 
         assert_eq!(args.path, None);
+        assert!(!args.unstaged_only);
+    }
+
+    #[test]
+    fn parses_unstaged_only_flag() {
+        let args = Args::parse_from(["ripdiff", "--unstaged-only"]);
+
+        assert!(args.unstaged_only);
+    }
+
+    #[test]
+    fn parses_unstaged_only_short_flag() {
+        let args = Args::parse_from(["ripdiff", "-u"]);
+
+        assert!(args.unstaged_only);
     }
 
     #[test]
