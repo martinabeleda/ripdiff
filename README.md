@@ -52,7 +52,7 @@ rd
 Or point it at a specific repo:
 
 ```
-ripdiff --path /some/repo
+ripdiff /some/repo
 ```
 
 ## Key Bindings

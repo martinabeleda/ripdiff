@@ -7,7 +7,7 @@ Set FontSize 20
 Set Padding 24
 Set TypingSpeed 0ms
 
-Type "rd --path ~/Development/strava"
+Type "rd ~/Development/strava"
 Enter
 Sleep 2s
 

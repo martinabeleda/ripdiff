@@ -23,7 +23,7 @@ use tokio::sync::watch;
 #[command(name = "ripdiff", about = "Terminal UI for navigating git diffs")]
 struct Args {
     /// Path to the git repository (defaults to current directory)
-    #[arg(short, long)]
+    #[arg(value_name = "PATH")]
     path: Option<PathBuf>,
 }
 
@@ -85,5 +85,33 @@ async fn main() -> Result<()> {
             eprintln!("{err}");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+    use clap::Parser;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_positional_path_argument() {
+        let args = Args::parse_from(["ripdiff", "/tmp/repo"]);
+
+        assert_eq!(args.path, Some(PathBuf::from("/tmp/repo")));
+    }
+
+    #[test]
+    fn defaults_path_when_not_provided() {
+        let args = Args::parse_from(["ripdiff"]);
+
+        assert_eq!(args.path, None);
+    }
+
+    #[test]
+    fn rejects_legacy_named_path_argument() {
+        let result = Args::try_parse_from(["ripdiff", "--path", "/tmp/repo"]);
+
+        assert!(result.is_err());
     }
 }
