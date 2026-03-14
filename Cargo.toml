@@ -3,6 +3,13 @@ name = "ripdiff"
 version = "0.1.0"
 edition = "2021"
 default-run = "ripdiff"
+description = "Terminal UI for navigating git diffs with optional difftastic integration"
+license = "MIT"
+repository = "https://github.com/martinabeleda/ripdiff"
+readme = "README.md"
+keywords = ["git", "diff", "tui", "terminal", "difftastic"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [".github/"]
 
 [[bin]]
 name = "ripdiff"
