@@ -64,11 +64,12 @@ fn substring_by_byte_replace_tabs(s: &str, start: usize, end: usize, tab_width: 
 fn width_respecting_tabs(s: &str, tab_width: usize) -> usize {
     let display_width = s.width();
 
-    // .width() on tabs returns 0, whereas we want to model them as
-    // `tab_width` spaces.
-    debug_assert_eq!("\t".width(), 0);
+    // `unicode-width` has changed how it reports tabs across versions.
+    // Normalize whatever intrinsic tab width the crate returns to the
+    // explicit `tab_width` difftastic wants to use for rendering.
     let tab_count = s.matches('\t').count();
-    let tab_display_width_extra = tab_count * tab_width;
+    let intrinsic_tab_width = '\t'.width().unwrap_or(0);
+    let tab_display_width_extra = tab_count * tab_width.saturating_sub(intrinsic_tab_width);
 
     display_width + tab_display_width_extra
 }
@@ -80,7 +81,7 @@ fn width_respecting_tabs(s: &str, tab_width: usize) -> usize {
 /// specify the number of spaces required to pad the part to reach the
 /// desired width.
 ///
-/// ```
+/// ```text
 /// split_string_by_width("fooba", 3) // vec![("foo", 0), ("ba", 1)]
 /// ```
 fn split_string_by_width(s: &str, max_width: usize, tab_width: usize) -> Vec<(&str, usize)> {

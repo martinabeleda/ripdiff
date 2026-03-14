@@ -204,7 +204,7 @@ fn unchanged_descendants<'a>(
 /// Nested sliders require a single unchanged descendant whose
 /// delimiters we can slide.
 ///
-/// ```
+/// ```text
 /// (old-1 (novel (old-2)))
 /// ```
 ///
