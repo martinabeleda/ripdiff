@@ -43,12 +43,10 @@ jobs:
           {
             echo "## ripdiff $GITHUB_REF_NAME"
             echo
-            echo "Published to crates.io from tag \\`$GITHUB_REF_NAME\\`."
-            echo
             echo "Install with:"
-            echo "\\`\\`\\`bash"
+            echo "```bash"
             echo "cargo install ripdiff"
-            echo "\\`\\`\\`"
+            echo "```"
           } > release-notes.md
 
       - name: Create GitHub release
