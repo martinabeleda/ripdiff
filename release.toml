@@ -4,7 +4,7 @@ consolidate-commits = true
 tag-name = "v{{version}}"
 tag-message = "ripdiff {{version}}"
 
-pre-release-commit-message = "release: {{version}}"
+pre-release-commit-message = "release"
 push-remote = "origin"
 
 publish = false
