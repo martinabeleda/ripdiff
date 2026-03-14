@@ -405,7 +405,9 @@ pub fn main_entry() {
 
                             s.spawn(move || {
                                 diff_iter
-                                    .try_for_each_with(send, |s, diff_result| s.send(diff_result))
+                                    .try_for_each_with(send, |s, diff_result| {
+                                        s.send(diff_result).map_err(|_| ())
+                                    })
                                     .expect("Receiver should be connected")
                             });
 
