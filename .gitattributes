@@ -1,1 +1,2 @@
-vendored_parsers/** liguist-vendored
+src/vendored_parsers/** liguist-vendored
+src/difftastic/** liguist-vendored
