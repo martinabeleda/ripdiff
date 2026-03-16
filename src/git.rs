@@ -124,6 +124,39 @@ pub fn unstage_all(repo_root: &Path) -> Result<()> {
     }
 }
 
+pub struct CommitOutput {
+    pub output: String,
+    pub succeeded: bool,
+}
+
+pub fn commit(repo_root: &Path, message: &str) -> CommitOutput {
+    let result = Command::new("git")
+        .current_dir(repo_root)
+        .args(["commit", "-m", message])
+        .output();
+
+    match result {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined = match (stdout.trim().is_empty(), stderr.trim().is_empty()) {
+                (false, false) => format!("{}\n{}", stdout.trim(), stderr.trim()),
+                (false, true) => stdout.trim().to_string(),
+                (true, false) => stderr.trim().to_string(),
+                (true, true) => String::new(),
+            };
+            CommitOutput {
+                output: combined,
+                succeeded: output.status.success(),
+            }
+        }
+        Err(e) => CommitOutput {
+            output: format!("Failed to run git commit: {e}"),
+            succeeded: false,
+        },
+    }
+}
+
 pub fn repo_has_head(repo_root: &Path) -> Result<bool> {
     let output = Command::new("git")
         .current_dir(repo_root)
@@ -790,5 +823,84 @@ mod tests {
 
         assert!(resolved.is_dir(), "expected git dir to be a directory");
         assert_ne!(resolved, worktree_path.join(".git"));
+    }
+
+    fn init_repo_with_identity() -> TempDir {
+        let temp = TempDir::new().expect("temp dir should be created");
+        run_git(temp.path(), &["init", "-q"]);
+        run_git(temp.path(), &["config", "user.name", "Test User"]);
+        run_git(temp.path(), &["config", "user.email", "test@example.com"]);
+        temp
+    }
+
+    #[test]
+    fn commit_creates_a_commit_and_returns_output() {
+        let temp = init_repo_with_identity();
+        fs::write(temp.path().join("file.txt"), "hello\n").expect("file should write");
+        run_git(temp.path(), &["add", "file.txt"]);
+
+        let result = commit(temp.path(), "initial commit");
+
+        assert!(
+            result.succeeded,
+            "commit should succeed; output: {}",
+            result.output
+        );
+        assert!(!result.output.is_empty(), "commit should produce output");
+
+        let log = Command::new("git")
+            .current_dir(temp.path())
+            .args(["log", "--oneline"])
+            .output()
+            .expect("git log should run");
+        let log_text = String::from_utf8_lossy(&log.stdout);
+        assert!(
+            log_text.contains("initial commit"),
+            "commit should appear in log"
+        );
+    }
+
+    #[test]
+    fn commit_output_includes_summary_line() {
+        let temp = init_repo_with_identity();
+        fs::write(temp.path().join("file.txt"), "hello\n").expect("file should write");
+        run_git(temp.path(), &["add", "file.txt"]);
+
+        let result = commit(temp.path(), "feat: add file");
+
+        assert!(result.succeeded);
+        assert!(
+            result.output.contains("feat: add file"),
+            "output should include commit message; got: {}",
+            result.output
+        );
+    }
+
+    #[test]
+    fn commit_fails_when_nothing_is_staged() {
+        let temp = init_repo_with_identity();
+        run_git_with_identity(temp.path(), &["commit", "--allow-empty", "-m", "init"]);
+
+        let result = commit(temp.path(), "should fail");
+
+        assert!(!result.succeeded, "commit should fail with nothing staged");
+        assert!(
+            !result.output.is_empty(),
+            "failure output should not be empty"
+        );
+    }
+
+    #[test]
+    fn commit_captures_stderr_on_failure() {
+        let temp = init_repo_with_identity();
+
+        let result = commit(temp.path(), "empty attempt");
+
+        assert!(!result.succeeded);
+        // git prints "nothing to commit" to stderr or stdout depending on version
+        assert!(
+            !result.output.is_empty(),
+            "output should explain the failure"
+        );
     }
 }

@@ -1,8 +1,8 @@
 use crate::diff::{DiffContent, DiffMode, DiffRequest, DiffService};
 use crate::event::Event;
 use crate::git::{
-    load_snapshot_with_options, repo_root, stage_all, stage_file, unstage_all, unstage_file,
-    FileStat, FileStatus, RepoSnapshot,
+    commit, load_snapshot_with_options, repo_root, stage_all, stage_file, unstage_all,
+    unstage_file, FileStat, FileStatus, RepoSnapshot,
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -17,6 +17,12 @@ use tokio::sync::mpsc;
 pub enum Panel {
     Files,
     Diff,
+}
+
+#[derive(Debug, Clone)]
+pub enum CommitDialog {
+    Composing { message: String },
+    Result { output: String, succeeded: bool },
 }
 
 pub struct App {
@@ -43,6 +49,7 @@ pub struct UiState {
     pub panel_width: u16,
     pub panel_height: u16,
     pub focus: Panel,
+    pub commit_dialog: Option<CommitDialog>,
 }
 
 pub struct DiffStore {
@@ -72,6 +79,7 @@ impl App {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -282,6 +290,56 @@ impl App {
         }
     }
 
+    fn handle_commit_key(&mut self, key: KeyEvent) {
+        match &self.ui.commit_dialog {
+            Some(CommitDialog::Composing { .. }) => match (key.code, key.modifiers) {
+                (KeyCode::Esc, _) => {
+                    self.ui.commit_dialog = None;
+                }
+                (KeyCode::Enter, _) => {
+                    self.execute_commit();
+                }
+                (KeyCode::Backspace, _) => {
+                    if let Some(CommitDialog::Composing { message }) = &mut self.ui.commit_dialog {
+                        message.pop();
+                    }
+                }
+                (KeyCode::Char(c), _) => {
+                    if let Some(CommitDialog::Composing { message }) = &mut self.ui.commit_dialog {
+                        message.push(c);
+                    }
+                }
+                _ => {}
+            },
+            Some(CommitDialog::Result { .. }) => {
+                self.ui.commit_dialog = None;
+            }
+            None => {}
+        }
+    }
+
+    fn execute_commit(&mut self) {
+        let message = match &self.ui.commit_dialog {
+            Some(CommitDialog::Composing { message }) => message.clone(),
+            _ => return,
+        };
+
+        if message.trim().is_empty() {
+            return;
+        }
+
+        let result = commit(&self.repo_root, &message);
+        let succeeded = result.succeeded;
+        self.ui.commit_dialog = Some(CommitDialog::Result {
+            output: result.output,
+            succeeded,
+        });
+
+        if succeeded {
+            self.force_refresh();
+        }
+    }
+
     pub fn diff_hunk_offsets(&self) -> Vec<usize> {
         let Some(diff) = self.selected_diff() else {
             return vec![];
@@ -337,6 +395,11 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        if self.ui.commit_dialog.is_some() {
+            self.handle_commit_key(key);
+            return;
+        }
+
         if self.ui.show_help {
             match (key.code, key.modifiers) {
                 (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Esc, _) => {
@@ -394,6 +457,12 @@ impl App {
             }
             (KeyCode::Char('S'), _) => {
                 self.toggle_all_files_staged();
+                return;
+            }
+            (KeyCode::Char('c'), KeyModifiers::NONE) => {
+                self.ui.commit_dialog = Some(CommitDialog::Composing {
+                    message: String::new(),
+                });
                 return;
             }
             _ => {}
@@ -697,6 +766,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -751,6 +821,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -816,6 +887,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -877,6 +949,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 3,
                 focus: Panel::Diff,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -942,6 +1015,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 3,
                 focus: Panel::Diff,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1028,6 +1102,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 3,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1106,6 +1181,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1152,6 +1228,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1199,6 +1276,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1259,6 +1337,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1274,6 +1353,161 @@ mod tests {
 
         assert!(has_unstaged_changes);
         assert!(has_staged_changes);
+    }
+
+    fn make_app() -> App {
+        App {
+            repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
+            snapshot: RepoSnapshot::default(),
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_help: false,
+                show_sidebar: true,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+                commit_dialog: None,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::new(),
+                loading: HashSet::new(),
+            },
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        }
+    }
+
+    #[test]
+    fn handle_key_c_opens_commit_dialog() {
+        let mut app = make_app();
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        let Some(CommitDialog::Composing { message }) = &app.ui.commit_dialog else {
+            panic!("expected Composing dialog");
+        };
+        assert!(message.is_empty());
+    }
+
+    #[test]
+    fn commit_dialog_typing_appends_characters() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: String::new(),
+        });
+        for ch in "fix: bug".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        let Some(CommitDialog::Composing { message }) = &app.ui.commit_dialog else {
+            panic!("expected Composing dialog");
+        };
+        assert_eq!(message, "fix: bug");
+    }
+
+    #[test]
+    fn commit_dialog_backspace_removes_last_character() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: "fix".to_string(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let Some(CommitDialog::Composing { message }) = &app.ui.commit_dialog else {
+            panic!("expected Composing dialog");
+        };
+        assert_eq!(message, "fi");
+    }
+
+    #[test]
+    fn commit_dialog_backspace_on_empty_message_does_nothing() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: String::new(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(
+            matches!(&app.ui.commit_dialog, Some(CommitDialog::Composing { message }) if message.is_empty())
+        );
+    }
+
+    #[test]
+    fn commit_dialog_esc_closes_dialog() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: "wip".to_string(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.ui.commit_dialog.is_none());
+    }
+
+    #[test]
+    fn commit_dialog_intercepts_q_key() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: String::new(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(
+            !app.should_quit,
+            "q should not quit while commit dialog is open"
+        );
+        let Some(CommitDialog::Composing { message }) = &app.ui.commit_dialog else {
+            panic!("expected Composing dialog");
+        };
+        assert_eq!(message, "q", "q should be appended to message");
+    }
+
+    #[test]
+    fn commit_dialog_enter_on_empty_message_stays_composing() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: String::new(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(app.ui.commit_dialog, Some(CommitDialog::Composing { .. })),
+            "dialog should remain open when message is empty"
+        );
+    }
+
+    #[test]
+    fn commit_dialog_enter_on_whitespace_only_message_stays_composing() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: "   ".to_string(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(app.ui.commit_dialog, Some(CommitDialog::Composing { .. })),
+            "dialog should remain open when message is whitespace-only"
+        );
+    }
+
+    #[test]
+    fn commit_dialog_result_any_key_closes_dialog() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Result {
+            output: "[main abc1234] fix: bug\n 1 file changed".to_string(),
+            succeeded: true,
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.ui.commit_dialog.is_none());
+    }
+
+    #[test]
+    fn commit_dialog_result_esc_closes_dialog() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Result {
+            output: "pre-commit hook failed".to_string(),
+            succeeded: false,
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.ui.commit_dialog.is_none());
     }
 
     #[test]
@@ -1311,6 +1545,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 3,
                 focus: Panel::Diff,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
