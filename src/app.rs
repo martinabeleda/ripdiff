@@ -1355,6 +1355,161 @@ mod tests {
         assert!(has_staged_changes);
     }
 
+    fn make_app() -> App {
+        App {
+            repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
+            snapshot: RepoSnapshot::default(),
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_help: false,
+                show_sidebar: true,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+                commit_dialog: None,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::new(),
+                loading: HashSet::new(),
+            },
+            last_refresh: Instant::now(),
+            should_quit: false,
+            error_message: None,
+        }
+    }
+
+    #[test]
+    fn handle_key_c_opens_commit_dialog() {
+        let mut app = make_app();
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+        let Some(CommitDialog::Composing { message }) = &app.ui.commit_dialog else {
+            panic!("expected Composing dialog");
+        };
+        assert!(message.is_empty());
+    }
+
+    #[test]
+    fn commit_dialog_typing_appends_characters() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: String::new(),
+        });
+        for ch in "fix: bug".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        let Some(CommitDialog::Composing { message }) = &app.ui.commit_dialog else {
+            panic!("expected Composing dialog");
+        };
+        assert_eq!(message, "fix: bug");
+    }
+
+    #[test]
+    fn commit_dialog_backspace_removes_last_character() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: "fix".to_string(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let Some(CommitDialog::Composing { message }) = &app.ui.commit_dialog else {
+            panic!("expected Composing dialog");
+        };
+        assert_eq!(message, "fi");
+    }
+
+    #[test]
+    fn commit_dialog_backspace_on_empty_message_does_nothing() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: String::new(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(
+            matches!(&app.ui.commit_dialog, Some(CommitDialog::Composing { message }) if message.is_empty())
+        );
+    }
+
+    #[test]
+    fn commit_dialog_esc_closes_dialog() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: "wip".to_string(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.ui.commit_dialog.is_none());
+    }
+
+    #[test]
+    fn commit_dialog_intercepts_q_key() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: String::new(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert!(
+            !app.should_quit,
+            "q should not quit while commit dialog is open"
+        );
+        let Some(CommitDialog::Composing { message }) = &app.ui.commit_dialog else {
+            panic!("expected Composing dialog");
+        };
+        assert_eq!(message, "q", "q should be appended to message");
+    }
+
+    #[test]
+    fn commit_dialog_enter_on_empty_message_stays_composing() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: String::new(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(app.ui.commit_dialog, Some(CommitDialog::Composing { .. })),
+            "dialog should remain open when message is empty"
+        );
+    }
+
+    #[test]
+    fn commit_dialog_enter_on_whitespace_only_message_stays_composing() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Composing {
+            message: "   ".to_string(),
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            matches!(app.ui.commit_dialog, Some(CommitDialog::Composing { .. })),
+            "dialog should remain open when message is whitespace-only"
+        );
+    }
+
+    #[test]
+    fn commit_dialog_result_any_key_closes_dialog() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Result {
+            output: "[main abc1234] fix: bug\n 1 file changed".to_string(),
+            succeeded: true,
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.ui.commit_dialog.is_none());
+    }
+
+    #[test]
+    fn commit_dialog_result_esc_closes_dialog() {
+        let mut app = make_app();
+        app.ui.commit_dialog = Some(CommitDialog::Result {
+            output: "pre-commit hook failed".to_string(),
+            succeeded: false,
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.ui.commit_dialog.is_none());
+    }
+
     #[test]
     fn diff_hunk_offsets_fall_back_to_change_blocks_for_difft_output() {
         let request = DiffRequest {
