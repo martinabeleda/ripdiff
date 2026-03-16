@@ -1,4 +1,4 @@
-use crate::app::{App, Panel};
+use crate::app::{App, CommitDialog, Panel};
 use crate::git::{FileStat, FileStatus};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -24,6 +24,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.ui.show_help {
         render_help_overlay(frame, area);
     }
+    if app.ui.commit_dialog.is_some() {
+        render_commit_dialog(frame, app, area);
+    }
 }
 
 fn render_title(frame: &mut Frame, app: &App, area: Rect) {
@@ -33,7 +36,6 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
         .and_then(|name| name.to_str())
         .unwrap_or("?");
 
-    let changed = app.files().len();
     let mode_label = app.ui.diff_mode.label();
     let branch = app.snapshot.branch.as_deref().unwrap_or("detached");
     let branch_icon = "\u{e0a0}";
@@ -51,8 +53,7 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
             Panel::Diff => "diff",
         };
         format!(
-            "  ripdiff  [repo: {repo_name}  {branch_icon} {branch}]  {changed} file{} changed  mode: {mode_label}  scope: {change_scope}  panel: {panel_label}  │  Tab:panel  t:mode  u:scope  r:refresh  h:help  q:quit",
-            if changed == 1 { "" } else { "s" },
+            "  ripdiff  [{repo_name}  {branch_icon} {branch}] mode: {mode_label}  scope: {change_scope}  panel: {panel_label}  │  Tab:panel  h:help  q:quit"
         )
     };
 
@@ -62,6 +63,98 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
         .add_modifier(Modifier::BOLD);
 
     frame.render_widget(Paragraph::new(title_text).style(style), area);
+}
+
+fn render_commit_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    match &app.ui.commit_dialog {
+        Some(CommitDialog::Composing { message }) => {
+            let dialog_width = (area.width.saturating_sub(4)).clamp(40, 72);
+            let dialog_height = 6u16;
+            let popup = centered_rect(area, dialog_width, dialog_height);
+
+            let cursor = if (frame.count() / 4) % 2 == 0 {
+                "█"
+            } else {
+                " "
+            };
+            let input_display = format!("{message}{cursor}");
+
+            let lines = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("Message: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(input_display),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Enter: commit   Esc: cancel",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+
+            let block = Block::default()
+                .title(" Commit ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .style(Style::default().bg(Color::Black));
+
+            frame.render_widget(Clear, popup);
+            frame.render_widget(Paragraph::new(Text::from(lines)).block(block), popup);
+        }
+        Some(CommitDialog::Result { output, succeeded }) => {
+            let status_line = if *succeeded {
+                Line::from(Span::styled(
+                    "  Committed successfully",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ))
+            } else {
+                Line::from(Span::styled(
+                    "  Commit failed",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ))
+            };
+
+            let output_lines: Vec<Line> = output
+                .lines()
+                .map(|l| Line::from(format!("  {l}")))
+                .collect();
+
+            let mut lines = vec![Line::from(""), status_line, Line::from("")];
+            lines.extend(output_lines);
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Press any key to close",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            let content_width = lines
+                .iter()
+                .map(display_width_for_line)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(4) as u16;
+            let dialog_width = content_width.max(40).min(area.width.saturating_sub(4));
+            let dialog_height = (lines.len() as u16).saturating_add(2);
+            let popup = centered_rect(area, dialog_width, dialog_height);
+
+            let block = Block::default()
+                .title(" Commit Result ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(if *succeeded {
+                    Color::Green
+                } else {
+                    Color::Red
+                }))
+                .style(Style::default().bg(Color::Black));
+
+            frame.render_widget(Clear, popup);
+            frame.render_widget(Paragraph::new(Text::from(lines)).block(block), popup);
+        }
+        None => {}
+    }
 }
 
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
@@ -76,6 +169,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  Ctrl-d / Ctrl-u  Scroll half a page in diff"),
         Line::from("  [ / ]            Jump to previous or next hunk"),
         Line::from("  s / S            Stage or unstage selected file / all files"),
+        Line::from("  c                Commit staged changes"),
         Line::from("  Space e          Hide or show the file sidebar"),
         Line::from("  Enter            Hide or show the selected file diff"),
         Line::from("  t                Toggle diff mode"),

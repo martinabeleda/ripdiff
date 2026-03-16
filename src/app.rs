@@ -1,8 +1,8 @@
 use crate::diff::{DiffContent, DiffMode, DiffRequest, DiffService};
 use crate::event::Event;
 use crate::git::{
-    load_snapshot_with_options, repo_root, stage_all, stage_file, unstage_all, unstage_file,
-    FileStat, FileStatus, RepoSnapshot,
+    commit, load_snapshot_with_options, repo_root, stage_all, stage_file, unstage_all,
+    unstage_file, FileStat, FileStatus, RepoSnapshot,
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -17,6 +17,12 @@ use tokio::sync::mpsc;
 pub enum Panel {
     Files,
     Diff,
+}
+
+#[derive(Debug, Clone)]
+pub enum CommitDialog {
+    Composing { message: String },
+    Result { output: String, succeeded: bool },
 }
 
 pub struct App {
@@ -43,6 +49,7 @@ pub struct UiState {
     pub panel_width: u16,
     pub panel_height: u16,
     pub focus: Panel,
+    pub commit_dialog: Option<CommitDialog>,
 }
 
 pub struct DiffStore {
@@ -72,6 +79,7 @@ impl App {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -282,6 +290,56 @@ impl App {
         }
     }
 
+    fn handle_commit_key(&mut self, key: KeyEvent) {
+        match &self.ui.commit_dialog {
+            Some(CommitDialog::Composing { .. }) => match (key.code, key.modifiers) {
+                (KeyCode::Esc, _) => {
+                    self.ui.commit_dialog = None;
+                }
+                (KeyCode::Enter, _) => {
+                    self.execute_commit();
+                }
+                (KeyCode::Backspace, _) => {
+                    if let Some(CommitDialog::Composing { message }) = &mut self.ui.commit_dialog {
+                        message.pop();
+                    }
+                }
+                (KeyCode::Char(c), _) => {
+                    if let Some(CommitDialog::Composing { message }) = &mut self.ui.commit_dialog {
+                        message.push(c);
+                    }
+                }
+                _ => {}
+            },
+            Some(CommitDialog::Result { .. }) => {
+                self.ui.commit_dialog = None;
+            }
+            None => {}
+        }
+    }
+
+    fn execute_commit(&mut self) {
+        let message = match &self.ui.commit_dialog {
+            Some(CommitDialog::Composing { message }) => message.clone(),
+            _ => return,
+        };
+
+        if message.trim().is_empty() {
+            return;
+        }
+
+        let result = commit(&self.repo_root, &message);
+        let succeeded = result.succeeded;
+        self.ui.commit_dialog = Some(CommitDialog::Result {
+            output: result.output,
+            succeeded,
+        });
+
+        if succeeded {
+            self.force_refresh();
+        }
+    }
+
     pub fn diff_hunk_offsets(&self) -> Vec<usize> {
         let Some(diff) = self.selected_diff() else {
             return vec![];
@@ -337,6 +395,11 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        if self.ui.commit_dialog.is_some() {
+            self.handle_commit_key(key);
+            return;
+        }
+
         if self.ui.show_help {
             match (key.code, key.modifiers) {
                 (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Esc, _) => {
@@ -394,6 +457,12 @@ impl App {
             }
             (KeyCode::Char('S'), _) => {
                 self.toggle_all_files_staged();
+                return;
+            }
+            (KeyCode::Char('c'), KeyModifiers::NONE) => {
+                self.ui.commit_dialog = Some(CommitDialog::Composing {
+                    message: String::new(),
+                });
                 return;
             }
             _ => {}
@@ -697,6 +766,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -751,6 +821,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -816,6 +887,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -877,6 +949,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 3,
                 focus: Panel::Diff,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -942,6 +1015,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 3,
                 focus: Panel::Diff,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1028,6 +1102,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 3,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1106,6 +1181,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1152,6 +1228,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1199,6 +1276,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1259,6 +1337,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 40,
                 focus: Panel::Files,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1311,6 +1390,7 @@ mod tests {
                 panel_width: 80,
                 panel_height: 3,
                 focus: Panel::Diff,
+                commit_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(

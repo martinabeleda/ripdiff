@@ -124,6 +124,39 @@ pub fn unstage_all(repo_root: &Path) -> Result<()> {
     }
 }
 
+pub struct CommitOutput {
+    pub output: String,
+    pub succeeded: bool,
+}
+
+pub fn commit(repo_root: &Path, message: &str) -> CommitOutput {
+    let result = Command::new("git")
+        .current_dir(repo_root)
+        .args(["commit", "-m", message])
+        .output();
+
+    match result {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined = match (stdout.trim().is_empty(), stderr.trim().is_empty()) {
+                (false, false) => format!("{}\n{}", stdout.trim(), stderr.trim()),
+                (false, true) => stdout.trim().to_string(),
+                (true, false) => stderr.trim().to_string(),
+                (true, true) => String::new(),
+            };
+            CommitOutput {
+                output: combined,
+                succeeded: output.status.success(),
+            }
+        }
+        Err(e) => CommitOutput {
+            output: format!("Failed to run git commit: {e}"),
+            succeeded: false,
+        },
+    }
+}
+
 pub fn repo_has_head(repo_root: &Path) -> Result<bool> {
     let output = Command::new("git")
         .current_dir(repo_root)
