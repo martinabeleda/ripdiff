@@ -32,6 +32,7 @@ ansi-to-tui = "7"
 anyhow = "1"
 bumpalo = "3.16.0"
 clap = { version = "4.0.0", features = ["cargo", "derive", "env", "string", "wrap_help"] }
+clap_lex = ">= 1.0.0, < 1.1.0"
 crossterm = { version = "0.28", features = ["windows"] }
 encoding_rs = "0.8.35"
 glob = "0.3.1"
