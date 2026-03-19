@@ -1,4 +1,4 @@
-use crate::app::{App, CommitDialog, Panel};
+use crate::app::{App, CommitDialog, Panel, PushDialog};
 use crate::git::{FileStat, FileStatus};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -16,16 +16,24 @@ pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let root_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
         .split(area);
 
     render_title(frame, app, root_chunks[0]);
     render_body(frame, app, root_chunks[1]);
+    render_statusline(frame, app, root_chunks[2]);
     if app.ui.show_help {
         render_help_overlay(frame, area);
     }
     if app.ui.commit_dialog.is_some() {
         render_commit_dialog(frame, app, area);
+    }
+    if app.ui.push_dialog.is_some() {
+        render_push_dialog(frame, app, area);
     }
 }
 
@@ -157,6 +165,74 @@ fn render_commit_dialog(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+fn render_statusline(frame: &mut Frame, app: &App, area: Rect) {
+    let (content, style) = match app.snapshot.unpushed_commits {
+        Some(n) if n > 0 => {
+            let label = if n == 1 { "commit" } else { "commits" };
+            (
+                format!("  \u{2191}{n} {label} to push  \u{2502}  p:push"),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .bg(Color::Rgb(30, 30, 30)),
+            )
+        }
+        _ => (String::new(), Style::default().bg(Color::Rgb(20, 20, 20))),
+    };
+    frame.render_widget(Paragraph::new(content).style(style), area);
+}
+
+fn render_push_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(PushDialog::Result { output, succeeded }) = &app.ui.push_dialog else {
+        return;
+    };
+
+    let status_line = if *succeeded {
+        Line::from(Span::styled(
+            "  Pushed successfully",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ))
+    } else {
+        Line::from(Span::styled(
+            "  Push failed",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ))
+    };
+
+    let output_lines: Vec<Line> = output
+        .lines()
+        .map(|l| Line::from(format!("  {l}")))
+        .collect();
+
+    let mut lines = vec![Line::from(""), status_line, Line::from("")];
+    lines.extend(output_lines);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Press any key to close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let content_width = lines
+        .iter()
+        .map(display_width_for_line)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(4) as u16;
+    let dialog_width = content_width.max(40).min(area.width.saturating_sub(4));
+    let dialog_height = (lines.len() as u16).saturating_add(2);
+    let popup = centered_rect(area, dialog_width, dialog_height);
+
+    let block = Block::default()
+        .title(" Push Result ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(if *succeeded { Color::Green } else { Color::Red }))
+        .style(Style::default().bg(Color::Black));
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(Text::from(lines)).block(block), popup);
+}
+
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
     let lines = vec![
         Line::from(Span::styled(
@@ -170,6 +246,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  [ / ]            Jump to previous or next hunk"),
         Line::from("  s / S            Stage or unstage selected file / all files"),
         Line::from("  c                Commit staged changes"),
+        Line::from("  p                Push commits to remote"),
         Line::from("  Space e          Hide or show the file sidebar"),
         Line::from("  Enter            Hide or show the selected file diff"),
         Line::from("  t                Toggle diff mode"),

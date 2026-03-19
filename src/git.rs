@@ -48,6 +48,7 @@ pub struct FileContentSignature {
 pub struct RepoSnapshot {
     pub branch: Option<String>,
     pub files: Vec<FileStat>,
+    pub unpushed_commits: Option<u32>,
 }
 
 pub fn repo_root(start: &Path) -> Result<PathBuf> {
@@ -129,6 +130,11 @@ pub struct CommitOutput {
     pub succeeded: bool,
 }
 
+pub struct PushOutput {
+    pub output: String,
+    pub succeeded: bool,
+}
+
 pub fn commit(repo_root: &Path, message: &str) -> CommitOutput {
     let result = Command::new("git")
         .current_dir(repo_root)
@@ -155,6 +161,50 @@ pub fn commit(repo_root: &Path, message: &str) -> CommitOutput {
             succeeded: false,
         },
     }
+}
+
+pub fn push(repo_root: &Path) -> PushOutput {
+    let result = Command::new("git")
+        .current_dir(repo_root)
+        .args(["push"])
+        .output();
+
+    match result {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined = match (stdout.trim().is_empty(), stderr.trim().is_empty()) {
+                (false, false) => format!("{}\n{}", stdout.trim(), stderr.trim()),
+                (false, true) => stdout.trim().to_string(),
+                (true, false) => stderr.trim().to_string(),
+                (true, true) => String::new(),
+            };
+            PushOutput {
+                output: combined,
+                succeeded: output.status.success(),
+            }
+        }
+        Err(e) => PushOutput {
+            output: format!("Failed to run git push: {e}"),
+            succeeded: false,
+        },
+    }
+}
+
+pub fn unpushed_commit_count(repo_root: &Path) -> Option<u32> {
+    let output = Command::new("git")
+        .current_dir(repo_root)
+        .args(["rev-list", "@{u}..HEAD", "--count"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
 }
 
 pub fn repo_has_head(repo_root: &Path) -> Result<bool> {
@@ -202,7 +252,11 @@ pub fn load_snapshot_with_options(
         file.content_signature = file_content_signature(repo_root.join(&file.path));
     }
 
-    Ok(RepoSnapshot { branch, files })
+    Ok(RepoSnapshot {
+        branch,
+        files,
+        unpushed_commits: unpushed_commit_count(repo_root),
+    })
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
