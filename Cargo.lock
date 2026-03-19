@@ -1010,6 +1010,7 @@ dependencies = [
  "bumpalo",
  "cc",
  "clap",
+ "clap_lex",
  "crossterm",
  "encoding_rs",
  "glob",
