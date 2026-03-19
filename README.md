@@ -1,15 +1,14 @@
-<!-- test change v2 -->
 ```
-            ███                █████  ███     ██████     ██████ 
+            ███                █████  ███     ██████     ██████
            ░░░                ░░███  ░░░     ███░░███   ███░░███
- ████████  ████  ████████   ███████  ████   ░███ ░░░   ░███ ░░░ 
-░░███░░███░░███ ░░███░░███ ███░░███ ░░███  ███████    ███████   
- ░███ ░░░  ░███  ░███ ░███░███ ░███  ░███ ░░░███░    ░░░███░    
- ░███      ░███  ░███ ░███░███ ░███  ░███   ░███       ░███     
- █████     █████ ░███████ ░░████████ █████  █████      █████    
-░░░░░     ░░░░░  ░███░░░   ░░░░░░░░ ░░░░░  ░░░░░      ░░░░░     
-                 ░███                                           
-                 █████                                          
+ ████████  ████  ████████   ███████  ████   ░███ ░░░   ░███ ░░░
+░░███░░███░░███ ░░███░░███ ███░░███ ░░███  ███████    ███████
+ ░███ ░░░  ░███  ░███ ░███░███ ░███  ░███ ░░░███░    ░░░███░
+ ░███      ░███  ░███ ░███░███ ░███  ░███   ░███       ░███
+ █████     █████ ░███████ ░░████████ █████  █████      █████
+░░░░░     ░░░░░  ░███░░░   ░░░░░░░░ ░░░░░  ░░░░░      ░░░░░
+                 ░███
+                 █████
                 ░░░░░
 ```
 
@@ -69,37 +68,37 @@ ripdiff --unstaged-only
 
 ### Global
 
-| Key | Action |
-|-----|--------|
-| `Tab` / `Shift-Tab` | Toggle focus between panels |
-| `h` / `?` | Open or close help |
-| `t` | Toggle between inline and side-by-side diff |
-| `u` | Toggle between all changes and unstaged-only changes |
-| `r` | Force refresh |
-| `q` / `Esc` | Quit |
+| Key                 | Action                                               |
+| ------------------- | ---------------------------------------------------- |
+| `Tab` / `Shift-Tab` | Toggle focus between panels                          |
+| `h` / `?`           | Open or close help                                   |
+| `t`                 | Toggle between inline and side-by-side diff          |
+| `u`                 | Toggle between all changes and unstaged-only changes |
+| `r`                 | Force refresh                                        |
+| `q` / `Esc`         | Quit                                                 |
 
 ### File List Panel
 
-| Key | Action |
-|-----|--------|
-| `j` / `↓` | Move file selection down |
-| `k` / `↑` | Move file selection up |
-| `→` | Switch to diff panel |
-| `gg` / `G` | Jump to top / bottom of file list |
-| `s` / `S` | Toggle selected file staged / toggle all files staged |
-| `Space e` | Hide / show file list sidebar |
-| `Enter` | Toggle diff visibility for selected file |
+| Key        | Action                                                |
+| ---------- | ----------------------------------------------------- |
+| `j` / `↓`  | Move file selection down                              |
+| `k` / `↑`  | Move file selection up                                |
+| `→`        | Switch to diff panel                                  |
+| `gg` / `G` | Jump to top / bottom of file list                     |
+| `s` / `S`  | Toggle selected file staged / toggle all files staged |
+| `Space e`  | Hide / show file list sidebar                         |
+| `Enter`    | Toggle diff visibility for selected file              |
 
 ### Diff Panel
 
-| Key | Action |
-|-----|--------|
-| `j` / `↓` | Scroll down one line |
-| `k` / `↑` | Scroll up one line |
-| `←` | Switch to file list |
-| `Ctrl-d` / `Ctrl-u` | Scroll half page down / up |
-| `gg` / `G` | Jump to top / bottom of diff |
-| `s` / `S` | Toggle selected file staged / toggle all files staged |
-| `]` / `[` | Jump to next / previous hunk |
-| `Space e` | Hide / show file list sidebar |
-| `Enter` | Toggle diff visibility for selected file |
+| Key                 | Action                                                |
+| ------------------- | ----------------------------------------------------- |
+| `j` / `↓`           | Scroll down one line                                  |
+| `k` / `↑`           | Scroll up one line                                    |
+| `←`                 | Switch to file list                                   |
+| `Ctrl-d` / `Ctrl-u` | Scroll half page down / up                            |
+| `gg` / `G`          | Jump to top / bottom of diff                          |
+| `s` / `S`           | Toggle selected file staged / toggle all files staged |
+| `]` / `[`           | Jump to next / previous hunk                          |
+| `Space e`           | Hide / show file list sidebar                         |
+| `Enter`             | Toggle diff visibility for selected file              |
