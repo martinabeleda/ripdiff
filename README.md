@@ -23,7 +23,7 @@ Uses [difftastic](https://difftastic.wilfred.me/) for structural, syntax-aware d
 ### Install from crates.io
 
 ```bash
-cargo install ripdiff
+cargo install --locked ripdiff
 ```
 
 This installs `ripdiff` into `~/.cargo/bin/`.
