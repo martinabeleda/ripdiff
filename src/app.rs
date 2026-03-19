@@ -1,7 +1,7 @@
 use crate::diff::{DiffContent, DiffMode, DiffRequest, DiffService};
 use crate::event::Event;
 use crate::git::{
-    commit, load_snapshot_with_options, repo_root, stage_all, stage_file, unstage_all,
+    commit, load_snapshot_with_options, push, repo_root, stage_all, stage_file, unstage_all,
     unstage_file, FileStat, FileStatus, RepoSnapshot,
 };
 use anyhow::Result;
@@ -22,6 +22,11 @@ pub enum Panel {
 #[derive(Debug, Clone)]
 pub enum CommitDialog {
     Composing { message: String },
+    Result { output: String, succeeded: bool },
+}
+
+#[derive(Debug, Clone)]
+pub enum PushDialog {
     Result { output: String, succeeded: bool },
 }
 
@@ -50,6 +55,7 @@ pub struct UiState {
     pub panel_height: u16,
     pub focus: Panel,
     pub commit_dialog: Option<CommitDialog>,
+    pub push_dialog: Option<PushDialog>,
 }
 
 pub struct DiffStore {
@@ -80,6 +86,7 @@ impl App {
                 panel_height: 40,
                 focus: Panel::Files,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -340,6 +347,18 @@ impl App {
         }
     }
 
+    fn execute_push(&mut self) {
+        let result = push(&self.repo_root);
+        let succeeded = result.succeeded;
+        self.ui.push_dialog = Some(PushDialog::Result {
+            output: result.output,
+            succeeded,
+        });
+        if succeeded {
+            self.force_refresh();
+        }
+    }
+
     pub fn diff_hunk_offsets(&self) -> Vec<usize> {
         let Some(diff) = self.selected_diff() else {
             return vec![];
@@ -397,6 +416,11 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
         if self.ui.commit_dialog.is_some() {
             self.handle_commit_key(key);
+            return;
+        }
+
+        if self.ui.push_dialog.is_some() {
+            self.ui.push_dialog = None;
             return;
         }
 
@@ -463,6 +487,10 @@ impl App {
                 self.ui.commit_dialog = Some(CommitDialog::Composing {
                     message: String::new(),
                 });
+                return;
+            }
+            (KeyCode::Char('p'), KeyModifiers::NONE) => {
+                self.execute_push();
                 return;
             }
             _ => {}
@@ -767,6 +795,7 @@ mod tests {
                 panel_height: 40,
                 focus: Panel::Files,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -798,6 +827,7 @@ mod tests {
             show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
+                unpushed_commits: None,
                 files: vec![FileStat {
                     path: "src/main.rs".to_string(),
                     additions: 1,
@@ -822,6 +852,7 @@ mod tests {
                 panel_height: 40,
                 focus: Panel::Files,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -855,6 +886,7 @@ mod tests {
     fn apply_snapshot_keeps_cache_when_snapshot_is_unchanged() {
         let snapshot = RepoSnapshot {
             branch: None,
+            unpushed_commits: None,
             files: vec![FileStat {
                 path: "src/main.rs".to_string(),
                 additions: 1,
@@ -888,6 +920,7 @@ mod tests {
                 panel_height: 40,
                 focus: Panel::Files,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -926,6 +959,7 @@ mod tests {
             show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
+                unpushed_commits: None,
                 files: vec![FileStat {
                     path: "src/main.rs".to_string(),
                     additions: 1,
@@ -950,6 +984,7 @@ mod tests {
                 panel_height: 3,
                 focus: Panel::Diff,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -992,6 +1027,7 @@ mod tests {
             show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
+                unpushed_commits: None,
                 files: vec![FileStat {
                     path: "src/main.rs".to_string(),
                     additions: 1,
@@ -1016,6 +1052,7 @@ mod tests {
                 panel_height: 3,
                 focus: Panel::Diff,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1059,6 +1096,7 @@ mod tests {
             show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
+                unpushed_commits: None,
                 files: vec![
                     FileStat {
                         path: "a.rs".to_string(),
@@ -1103,6 +1141,7 @@ mod tests {
                 panel_height: 3,
                 focus: Panel::Files,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1158,6 +1197,7 @@ mod tests {
             show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
+                unpushed_commits: None,
                 files: vec![FileStat {
                     path: "src/main.rs".to_string(),
                     additions: 1,
@@ -1182,6 +1222,7 @@ mod tests {
                 panel_height: 40,
                 focus: Panel::Files,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1213,6 +1254,7 @@ mod tests {
             show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
+                unpushed_commits: None,
                 files: vec![],
             },
             ui: UiState {
@@ -1229,6 +1271,7 @@ mod tests {
                 panel_height: 40,
                 focus: Panel::Files,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1253,6 +1296,7 @@ mod tests {
             show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
+                unpushed_commits: None,
                 files: vec![FileStat {
                     path: "tracked.txt".to_string(),
                     additions: 1,
@@ -1277,6 +1321,7 @@ mod tests {
                 panel_height: 40,
                 focus: Panel::Files,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1314,6 +1359,7 @@ mod tests {
             show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
+                unpushed_commits: None,
                 files: vec![FileStat {
                     path: "tracked.txt".to_string(),
                     additions: 1,
@@ -1338,6 +1384,7 @@ mod tests {
                 panel_height: 40,
                 focus: Panel::Files,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1374,6 +1421,7 @@ mod tests {
                 panel_height: 40,
                 focus: Panel::Files,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1522,6 +1570,7 @@ mod tests {
             show_unstaged_only: false,
             snapshot: RepoSnapshot {
                 branch: None,
+                unpushed_commits: None,
                 files: vec![FileStat {
                     path: "src/main.rs".to_string(),
                     additions: 2,
@@ -1546,6 +1595,7 @@ mod tests {
                 panel_height: 3,
                 focus: Panel::Diff,
                 commit_dialog: None,
+                push_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
