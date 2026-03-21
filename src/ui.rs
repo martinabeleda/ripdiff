@@ -61,7 +61,7 @@ fn render_title(frame: &mut Frame, app: &App, area: Rect) {
             Panel::Diff => "diff",
         };
         format!(
-            "  ripdiff  [{repo_name}  {branch_icon} {branch}] mode: {mode_label}  scope: {change_scope}  panel: {panel_label}  │  Tab:panel  h:help  q:quit"
+            "  ripdiff  [{repo_name}  {branch_icon} {branch}] mode: {mode_label}  scope: {change_scope}  panel: {panel_label}  │  Tab:panel  h:help  q:quit  o:scope"
         )
     };
 
@@ -245,12 +245,14 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  Ctrl-d / Ctrl-u  Scroll half a page in diff"),
         Line::from("  [ / ]            Jump to previous or next hunk"),
         Line::from("  s / S            Stage or unstage selected file / all files"),
+        Line::from("  u                Unstage selected file"),
+        Line::from("  U                Unstage all files"),
+        Line::from("  o                Toggle all changes / unstaged-only scope"),
         Line::from("  c                Commit staged changes"),
         Line::from("  p                Push commits to remote"),
         Line::from("  Space e          Hide or show the file sidebar"),
         Line::from("  Enter            Hide or show the selected file diff"),
         Line::from("  t                Toggle diff mode"),
-        Line::from("  u                Toggle all changes / unstaged-only scope"),
         Line::from("  r                Refresh"),
         Line::from("  h / ? / Esc      Close this help"),
         Line::from("  q                Quit"),

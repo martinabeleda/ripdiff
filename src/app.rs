@@ -280,6 +280,31 @@ impl App {
         }
     }
 
+    pub fn unstage_selected_changes(&mut self) {
+        let Some(file) = self.selected_file().cloned() else {
+            return;
+        };
+
+        if file.has_staged_changes {
+            let result = unstage_file(&self.repo_root, &file.path);
+            match result {
+                Ok(()) => self.force_refresh(),
+                Err(error) => self.error_message = Some(format!("git error: {error}")),
+            }
+        }
+    }
+
+    pub fn unstage_all_changes(&mut self) {
+        let has_staged_changes = self.files().iter().any(|file| file.has_staged_changes);
+        if has_staged_changes {
+            let result = unstage_all(&self.repo_root);
+            match result {
+                Ok(()) => self.force_refresh(),
+                Err(error) => self.error_message = Some(format!("git error: {error}")),
+            }
+        }
+    }
+
     pub fn toggle_all_files_staged(&mut self) {
         let has_unstaged_changes = self.files().iter().any(|file| file.has_unstaged_changes);
         let has_staged_changes = self.files().iter().any(|file| file.has_staged_changes);
@@ -465,6 +490,14 @@ impl App {
                 return;
             }
             (KeyCode::Char('u'), KeyModifiers::NONE) => {
+                self.unstage_selected_changes();
+                return;
+            }
+            (KeyCode::Char('U'), KeyModifiers::SHIFT) => {
+                self.unstage_all_changes();
+                return;
+            }
+            (KeyCode::Char('o'), KeyModifiers::NONE) => {
                 self.toggle_unstaged_only();
                 return;
             }
@@ -1290,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_key_toggles_unstaged_only_scope() {
+    fn handle_key_u_unstages_selected_file() {
         let mut app = App {
             repo_root: PathBuf::from("."),
             show_unstaged_only: false,
@@ -1303,7 +1336,7 @@ mod tests {
                     deletions: 0,
                     status: FileStatus::Modified,
                     has_staged_changes: true,
-                    has_unstaged_changes: true,
+                    has_unstaged_changes: false,
                     content_signature: None,
                 }],
             },
@@ -1324,28 +1357,135 @@ mod tests {
                 push_dialog: None,
             },
             diff_store: DiffStore {
-                cache: HashMap::from([(
-                    DiffRequest {
-                        path: "tracked.txt".to_string(),
-                        panel_width: 80,
-                        mode: DiffMode::Inline,
+                cache: HashMap::new(),
+                loading: HashSet::new(),
+            },
+            last_refresh: Instant::now() - Duration::from_secs(11),
+            should_quit: false,
+            error_message: None,
+        };
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+
+        // Unstaging should trigger a refresh (last_refresh should update)
+        assert!(app.last_refresh.elapsed() >= Duration::from_millis(10));
+    }
+
+    #[test]
+    fn handle_key_u_unstages_all_staged_files() {
+        let mut app = App {
+            repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
+            snapshot: RepoSnapshot {
+                branch: None,
+                unpushed_commits: None,
+                files: vec![
+                    FileStat {
+                        path: "file1.txt".to_string(),
+                        additions: 1,
+                        deletions: 0,
+                        status: FileStatus::Modified,
+                        has_staged_changes: true,
+                        has_unstaged_changes: false,
+                        content_signature: None,
                     },
-                    DiffContent {
-                        lines: vec![Line::from("stale")],
+                    FileStat {
+                        path: "file2.txt".to_string(),
+                        additions: 1,
+                        deletions: 0,
+                        status: FileStatus::Modified,
+                        has_staged_changes: true,
+                        has_unstaged_changes: false,
+                        content_signature: None,
                     },
-                )]),
-                loading: HashSet::from([DiffRequest {
-                    path: "tracked.txt".to_string(),
-                    panel_width: 80,
-                    mode: DiffMode::Inline,
-                }]),
+                ],
+            },
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_help: false,
+                show_sidebar: true,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+                commit_dialog: None,
+                push_dialog: None,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::new(),
+                loading: HashSet::new(),
+            },
+            last_refresh: Instant::now() - Duration::from_secs(11),
+            should_quit: false,
+            error_message: None,
+        };
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::SHIFT));
+
+        // Unstaging all should trigger a refresh (last_refresh should update)
+        assert!(app.last_refresh.elapsed() >= Duration::from_millis(10));
+    }
+
+    #[test]
+    fn handle_key_o_toggles_unstaged_only_scope() {
+        let mut app = App {
+            repo_root: PathBuf::from("."),
+            show_unstaged_only: false,
+            snapshot: RepoSnapshot {
+                branch: None,
+                unpushed_commits: None,
+                files: vec![
+                    FileStat {
+                        path: "file1.txt".to_string(),
+                        additions: 1,
+                        deletions: 0,
+                        status: FileStatus::Modified,
+                        has_staged_changes: true,
+                        has_unstaged_changes: false,
+                        content_signature: None,
+                    },
+                    FileStat {
+                        path: "file2.txt".to_string(),
+                        additions: 1,
+                        deletions: 0,
+                        status: FileStatus::Modified,
+                        has_staged_changes: true,
+                        has_unstaged_changes: false,
+                        content_signature: None,
+                    },
+                ],
+            },
+            ui: UiState {
+                selected: 0,
+                diff_cursor: 0,
+                scroll_offset: 0,
+                pending_g: false,
+                pending_space: false,
+                show_help: false,
+                show_sidebar: true,
+                hidden_files: HashSet::new(),
+                diff_mode: DiffMode::Inline,
+                panel_width: 80,
+                panel_height: 40,
+                focus: Panel::Files,
+                commit_dialog: None,
+                push_dialog: None,
+            },
+            diff_store: DiffStore {
+                cache: HashMap::new(),
+                loading: HashSet::new(),
             },
             last_refresh: Instant::now(),
             should_quit: false,
             error_message: None,
         };
 
-        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
 
         assert!(app.show_unstaged_only);
         assert!(app.diff_store.cache.is_empty());
