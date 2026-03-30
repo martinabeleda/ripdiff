@@ -166,19 +166,53 @@ fn render_commit_dialog(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_statusline(frame: &mut Frame, app: &App, area: Rect) {
-    let (content, style) = match app.snapshot.unpushed_commits {
-        Some(n) if n > 0 => {
-            let label = if n == 1 { "commit" } else { "commits" };
-            (
-                format!("  \u{2191}{n} {label} to push  \u{2502}  p:push"),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .bg(Color::Rgb(30, 30, 30)),
-            )
+    let file_count = app.snapshot.files.len();
+    let total_additions: u32 = app.snapshot.files.iter().map(|f| f.additions).sum();
+    let total_deletions: u32 = app.snapshot.files.iter().map(|f| f.deletions).sum();
+
+    let stats_text = if file_count > 0 {
+        let file_label = if file_count == 1 { "file" } else { "files" };
+        let mut parts = vec![format!("{file_count} {file_label} changed")];
+        if total_additions > 0 {
+            parts.push(format!("+{total_additions}"));
         }
-        _ => (String::new(), Style::default().bg(Color::Rgb(20, 20, 20))),
+        if total_deletions > 0 {
+            parts.push(format!("-{total_deletions}"));
+        }
+        parts.join(", ")
+    } else {
+        String::new()
     };
-    frame.render_widget(Paragraph::new(content).style(style), area);
+
+    let bg = Color::Rgb(30, 30, 30);
+
+    let mut spans: Vec<Span> = Vec::new();
+
+    if let Some(n) = app.snapshot.unpushed_commits {
+        if n > 0 {
+            let label = if n == 1 { "commit" } else { "commits" };
+            spans.push(Span::styled(
+                format!("  \u{2191}{n} {label} to push  \u{2502}  p:push"),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+    }
+
+    if !stats_text.is_empty() {
+        if !spans.is_empty() {
+            spans.push(Span::styled(
+                "  \u{2502}  ",
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(stats_text, Style::default().fg(Color::Yellow)));
+    }
+
+    let line = Line::from(spans);
+    let style = Style::default().bg(bg);
+    frame.render_widget(Paragraph::new(line).style(style), area);
 }
 
 fn render_push_dialog(frame: &mut Frame, app: &App, area: Rect) {
