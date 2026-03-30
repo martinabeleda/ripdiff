@@ -389,6 +389,7 @@ impl App {
     }
 
     fn execute_push(&mut self) {
+        let previous_unpushed = self.snapshot.unpushed_commits;
         let result = push(&self.repo_root);
         let succeeded = result.succeeded;
         self.ui.push_dialog = Some(PushDialog::Result {
@@ -396,7 +397,19 @@ impl App {
             succeeded,
         });
         if succeeded {
-            self.force_refresh();
+            self.refresh_unpushed_after_push(previous_unpushed, |app| app.force_refresh());
+        }
+    }
+
+    fn refresh_unpushed_after_push<F>(&mut self, previous_unpushed: Option<u32>, mut refresh: F)
+    where
+        F: FnMut(&mut Self),
+    {
+        refresh(self);
+
+        if matches!((previous_unpushed, self.snapshot.unpushed_commits), (Some(before), Some(after)) if after >= before)
+        {
+            refresh(self);
         }
     }
 
@@ -1742,6 +1755,36 @@ mod tests {
 
         assert_eq!(refresh_calls, 1, "single refresh should be enough");
         assert_eq!(app.snapshot.unpushed_commits, Some(4));
+    }
+
+    #[test]
+    fn refresh_unpushed_after_push_retries_when_first_refresh_is_stale() {
+        let mut app = make_app();
+        app.snapshot.unpushed_commits = Some(3);
+
+        let mut refresh_calls = 0;
+        app.refresh_unpushed_after_push(Some(3), |app| {
+            refresh_calls += 1;
+            app.snapshot.unpushed_commits = if refresh_calls == 1 { Some(3) } else { Some(0) };
+        });
+
+        assert_eq!(refresh_calls, 2, "should retry refresh after stale result");
+        assert_eq!(app.snapshot.unpushed_commits, Some(0));
+    }
+
+    #[test]
+    fn refresh_unpushed_after_push_does_not_retry_when_unpushed_drops() {
+        let mut app = make_app();
+        app.snapshot.unpushed_commits = Some(3);
+
+        let mut refresh_calls = 0;
+        app.refresh_unpushed_after_push(Some(3), |app| {
+            refresh_calls += 1;
+            app.snapshot.unpushed_commits = Some(0);
+        });
+
+        assert_eq!(refresh_calls, 1, "single refresh should be enough");
+        assert_eq!(app.snapshot.unpushed_commits, Some(0));
     }
 
     #[test]
