@@ -102,6 +102,10 @@ impl App {
         if self.last_refresh.elapsed() < Duration::from_millis(300) {
             return;
         }
+        self.refresh_now();
+    }
+
+    fn refresh_now(&mut self) {
         self.last_refresh = Instant::now();
 
         match load_snapshot_with_options(&self.repo_root, self.show_unstaged_only) {
@@ -121,8 +125,7 @@ impl App {
     }
 
     pub fn force_refresh(&mut self) {
-        self.last_refresh = Instant::now() - Duration::from_secs(10);
-        self.refresh();
+        self.refresh_now();
     }
 
     pub fn files(&self) -> &[FileStat] {
@@ -360,6 +363,7 @@ impl App {
             return;
         }
 
+        let previous_unpushed = self.snapshot.unpushed_commits;
         let result = commit(&self.repo_root, &message);
         let succeeded = result.succeeded;
         self.ui.commit_dialog = Some(CommitDialog::Result {
@@ -368,7 +372,19 @@ impl App {
         });
 
         if succeeded {
-            self.force_refresh();
+            self.refresh_unpushed_after_commit(previous_unpushed, |app| app.force_refresh());
+        }
+    }
+
+    fn refresh_unpushed_after_commit<F>(&mut self, previous_unpushed: Option<u32>, mut refresh: F)
+    where
+        F: FnMut(&mut Self),
+    {
+        refresh(self);
+
+        if matches!((previous_unpushed, self.snapshot.unpushed_commits), (Some(before), Some(after)) if after <= before)
+        {
+            refresh(self);
         }
     }
 
@@ -1696,6 +1712,36 @@ mod tests {
         });
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.ui.commit_dialog.is_none());
+    }
+
+    #[test]
+    fn refresh_unpushed_after_commit_retries_when_first_refresh_is_stale() {
+        let mut app = make_app();
+        app.snapshot.unpushed_commits = Some(3);
+
+        let mut refresh_calls = 0;
+        app.refresh_unpushed_after_commit(Some(3), |app| {
+            refresh_calls += 1;
+            app.snapshot.unpushed_commits = if refresh_calls == 1 { Some(3) } else { Some(4) };
+        });
+
+        assert_eq!(refresh_calls, 2, "should retry refresh after stale result");
+        assert_eq!(app.snapshot.unpushed_commits, Some(4));
+    }
+
+    #[test]
+    fn refresh_unpushed_after_commit_does_not_retry_when_unpushed_advances() {
+        let mut app = make_app();
+        app.snapshot.unpushed_commits = Some(3);
+
+        let mut refresh_calls = 0;
+        app.refresh_unpushed_after_commit(Some(3), |app| {
+            refresh_calls += 1;
+            app.snapshot.unpushed_commits = Some(4);
+        });
+
+        assert_eq!(refresh_calls, 1, "single refresh should be enough");
+        assert_eq!(app.snapshot.unpushed_commits, Some(4));
     }
 
     #[test]
