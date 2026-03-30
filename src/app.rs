@@ -1,8 +1,8 @@
 use crate::diff::{DiffContent, DiffMode, DiffRequest, DiffService};
 use crate::event::Event;
 use crate::git::{
-    commit, load_snapshot_with_options, push, repo_root, stage_all, stage_file, unstage_all,
-    unstage_file, FileStat, FileStatus, RepoSnapshot,
+    commit, discard_file, load_snapshot_with_options, push, repo_root, stage_all, stage_file,
+    unstage_all, unstage_file, FileStat, FileStatus, RepoSnapshot,
 };
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -28,6 +28,11 @@ pub enum CommitDialog {
 #[derive(Debug, Clone)]
 pub enum PushDialog {
     Result { output: String, succeeded: bool },
+}
+
+#[derive(Debug, Clone)]
+pub enum ConfirmDialog {
+    DiscardFile { path: String },
 }
 
 pub struct App {
@@ -56,6 +61,7 @@ pub struct UiState {
     pub focus: Panel,
     pub commit_dialog: Option<CommitDialog>,
     pub push_dialog: Option<PushDialog>,
+    pub confirm_dialog: Option<ConfirmDialog>,
 }
 
 pub struct DiffStore {
@@ -87,6 +93,7 @@ impl App {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -353,6 +360,21 @@ impl App {
         }
     }
 
+    fn handle_confirm_key(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) | (KeyCode::Char('n'), KeyModifiers::NONE) => {
+                self.ui.confirm_dialog = None;
+            }
+            (KeyCode::Enter, _) | (KeyCode::Char('y'), KeyModifiers::NONE) => {
+                let dialog = self.ui.confirm_dialog.take();
+                if let Some(ConfirmDialog::DiscardFile { path }) = dialog {
+                    self.execute_discard_file(&path);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn execute_commit(&mut self) {
         let message = match &self.ui.commit_dialog {
             Some(CommitDialog::Composing { message }) => message.clone(),
@@ -397,6 +419,23 @@ impl App {
         });
         if succeeded {
             self.force_refresh();
+        }
+    }
+
+    fn open_discard_confirmation(&mut self) {
+        let Some(file) = self.selected_file() else {
+            return;
+        };
+
+        self.ui.confirm_dialog = Some(ConfirmDialog::DiscardFile {
+            path: file.path.clone(),
+        });
+    }
+
+    fn execute_discard_file(&mut self, path: &str) {
+        match discard_file(&self.repo_root, path) {
+            Ok(()) => self.force_refresh(),
+            Err(error) => self.error_message = Some(format!("git error: {error}")),
         }
     }
 
@@ -462,6 +501,11 @@ impl App {
 
         if self.ui.push_dialog.is_some() {
             self.ui.push_dialog = None;
+            return;
+        }
+
+        if self.ui.confirm_dialog.is_some() {
+            self.handle_confirm_key(key);
             return;
         }
 
@@ -540,6 +584,10 @@ impl App {
             }
             (KeyCode::Char('p'), KeyModifiers::NONE) => {
                 self.execute_push();
+                return;
+            }
+            (KeyCode::Char('d'), KeyModifiers::NONE) => {
+                self.open_discard_confirmation();
                 return;
             }
             _ => {}
@@ -845,6 +893,7 @@ mod tests {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -902,6 +951,7 @@ mod tests {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -970,6 +1020,7 @@ mod tests {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1034,6 +1085,7 @@ mod tests {
                 focus: Panel::Diff,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1102,6 +1154,7 @@ mod tests {
                 focus: Panel::Diff,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1191,6 +1244,7 @@ mod tests {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(
@@ -1272,6 +1326,7 @@ mod tests {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1321,6 +1376,7 @@ mod tests {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1371,6 +1427,7 @@ mod tests {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1431,6 +1488,7 @@ mod tests {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1491,6 +1549,7 @@ mod tests {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1541,6 +1600,7 @@ mod tests {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1578,6 +1638,7 @@ mod tests {
                 focus: Panel::Files,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::new(),
@@ -1587,6 +1648,40 @@ mod tests {
             should_quit: false,
             error_message: None,
         }
+    }
+
+    #[test]
+    fn handle_key_d_opens_discard_confirmation_dialog() {
+        let mut app = make_app();
+        app.snapshot.files = vec![FileStat {
+            path: "tracked.txt".to_string(),
+            additions: 1,
+            deletions: 0,
+            status: FileStatus::Modified,
+            has_staged_changes: false,
+            has_unstaged_changes: true,
+            content_signature: None,
+        }];
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+
+        assert!(matches!(
+            app.ui.confirm_dialog,
+            Some(ConfirmDialog::DiscardFile { .. })
+        ));
+    }
+
+    #[test]
+    fn confirm_dialog_n_cancels_without_quitting() {
+        let mut app = make_app();
+        app.ui.confirm_dialog = Some(ConfirmDialog::DiscardFile {
+            path: "tracked.txt".to_string(),
+        });
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+
+        assert!(app.ui.confirm_dialog.is_none());
+        assert!(!app.should_quit);
     }
 
     #[test]
@@ -1782,6 +1877,7 @@ mod tests {
                 focus: Panel::Diff,
                 commit_dialog: None,
                 push_dialog: None,
+                confirm_dialog: None,
             },
             diff_store: DiffStore {
                 cache: HashMap::from([(

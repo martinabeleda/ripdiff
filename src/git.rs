@@ -125,6 +125,57 @@ pub fn unstage_all(repo_root: &Path) -> Result<()> {
     }
 }
 
+pub fn discard_file(repo_root: &Path, path: &str) -> Result<()> {
+    if repo_has_head(repo_root)? {
+        let restore = Command::new("git")
+            .current_dir(repo_root)
+            .args([
+                "restore",
+                "--source=HEAD",
+                "--staged",
+                "--worktree",
+                "--",
+                path,
+            ])
+            .output()
+            .with_context(|| {
+                format!("Failed to run git restore --source=HEAD --staged --worktree -- {path}")
+            })?;
+
+        if restore.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&restore.stderr);
+        let error = stderr.trim();
+        if error.contains("pathspec") && error.contains("did not match") {
+            return run_git_ok(
+                repo_root,
+                &["clean", "-f", "--", path],
+                &format!("Failed to run git clean -f -- {path}"),
+            );
+        }
+
+        anyhow::bail!("{error}");
+    }
+
+    let rm = Command::new("git")
+        .current_dir(repo_root)
+        .args(["rm", "-f", "--", path])
+        .output()
+        .with_context(|| format!("Failed to run git rm -f -- {path}"))?;
+
+    if rm.status.success() {
+        return Ok(());
+    }
+
+    run_git_ok(
+        repo_root,
+        &["clean", "-f", "--", path],
+        &format!("Failed to run git clean -f -- {path}"),
+    )
+}
+
 pub struct CommitOutput {
     pub output: String,
     pub succeeded: bool,
@@ -804,6 +855,37 @@ mod tests {
         assert!(!untracked.has_staged_changes);
         assert!(untracked.has_unstaged_changes);
         assert_eq!(untracked.status, FileStatus::Untracked);
+    }
+
+    #[test]
+    fn discard_file_restores_tracked_changes() {
+        let temp = init_repo();
+        fs::write(temp.path().join("tracked.txt"), "before\n").expect("fixture should be written");
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git_with_identity(temp.path(), &["commit", "-qm", "init"]);
+
+        fs::write(temp.path().join("tracked.txt"), "before\nafter\n")
+            .expect("fixture should update");
+
+        discard_file(temp.path(), "tracked.txt").expect("tracked file should restore");
+
+        let files = list_changed_files(temp.path()).expect("changed files should load");
+        assert!(files.is_empty());
+        let content =
+            fs::read_to_string(temp.path().join("tracked.txt")).expect("file should exist");
+        assert_eq!(content, "before\n");
+    }
+
+    #[test]
+    fn discard_file_removes_untracked_file() {
+        let temp = init_repo();
+        fs::write(temp.path().join("untracked.txt"), "temp\n").expect("fixture should be written");
+
+        discard_file(temp.path(), "untracked.txt").expect("untracked file should discard");
+
+        assert!(!temp.path().join("untracked.txt").exists());
+        let files = list_changed_files(temp.path()).expect("changed files should load");
+        assert!(files.is_empty());
     }
 
     #[test]

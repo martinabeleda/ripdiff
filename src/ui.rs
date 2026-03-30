@@ -1,4 +1,4 @@
-use crate::app::{App, CommitDialog, Panel, PushDialog};
+use crate::app::{App, CommitDialog, ConfirmDialog, Panel, PushDialog};
 use crate::git::{FileStat, FileStatus};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -34,6 +34,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     if app.ui.push_dialog.is_some() {
         render_push_dialog(frame, app, area);
+    }
+    if app.ui.confirm_dialog.is_some() {
+        render_confirm_dialog(frame, app, area);
     }
 }
 
@@ -267,6 +270,48 @@ fn render_push_dialog(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Text::from(lines)).block(block), popup);
 }
 
+fn render_confirm_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(ConfirmDialog::DiscardFile { path }) = &app.ui.confirm_dialog else {
+        return;
+    };
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Discard all changes for this file?",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("  {path}"),
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  y / Enter: confirm   n / Esc: cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let content_width = lines
+        .iter()
+        .map(display_width_for_line)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(4) as u16;
+    let dialog_width = content_width.max(48).min(area.width.saturating_sub(4));
+    let dialog_height = (lines.len() as u16).saturating_add(2);
+    let popup = centered_rect(area, dialog_width, dialog_height);
+
+    let block = Block::default()
+        .title(" Confirm Discard ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red))
+        .style(Style::default().bg(Color::Black));
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(Text::from(lines)).block(block), popup);
+}
+
 fn render_help_overlay(frame: &mut Frame, area: Rect) {
     let lines = vec![
         Line::from(Span::styled(
@@ -282,6 +327,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  u                Unstage selected file"),
         Line::from("  U                Unstage all files"),
         Line::from("  o                Toggle all changes / unstaged-only scope"),
+        Line::from("  d                Discard selected file changes (with confirm)"),
         Line::from("  c                Commit staged changes"),
         Line::from("  p                Push commits to remote"),
         Line::from("  Space e          Hide or show the file sidebar"),
