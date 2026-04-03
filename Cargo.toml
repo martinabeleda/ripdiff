@@ -59,7 +59,7 @@ strsim = "0.11.0"
 strum = { version = "0.26", features = ["derive"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
-tree-sitter = "~0.26.3"
+tree-sitter = "~0.26.8"
 tree-sitter-ada = "0.1.0"
 tree-sitter-bash = "0.23.3"
 tree-sitter-c = "0.24"
