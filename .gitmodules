@@ -1,0 +1,3 @@
+[submodule "vendor/difftastic"]
+	path = vendor/difftastic
+	url = https://github.com/seatedro/difftastic.git

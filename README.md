@@ -16,6 +16,8 @@ A terminal UI for watching and reviewing agent progress, designed for a tmux pan
 
 Uses [difftastic](https://difftastic.wilfred.me/) for structural, syntax-aware diffs with ANSI color output via an in-process Rust dependency.
 
+The vendored difftastic source is tracked against the [`seatedro/difftastic`](https://github.com/seatedro/difftastic) fork (also available as a git submodule at `vendor/difftastic`).
+
 ![ripdiff demo](docs/media/strava-demo.gif)
 
 ## Install

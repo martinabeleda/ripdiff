@@ -3,7 +3,8 @@ name = "ripdiff"
 version = "0.8.1"
 edition = "2021"
 rust-version = "1.85"
-build = "build.rs"
+build = false
+
 default-run = "ripdiff"
 description = "Terminal UI for watching and reviewing agent progress"
 license = "MIT"
@@ -13,11 +14,7 @@ documentation = "https://docs.rs/ripdiff"
 readme = "README.md"
 keywords = ["git", "diff", "tui", "review", "agent"]
 categories = ["command-line-utilities", "development-tools"]
-include = ["build.rs", "src/**", "vendor/difftastic/**", "Cargo.toml", "README.md", "LICENSE"]
-
-[lib]
-name = "difftastic"
-path = "src/difftastic/lib.rs"
+include = ["build.rs", "src/**", "vendor/VENDORED.md", ".gitmodules", "Cargo.toml", "README.md", "LICENSE"]
 
 [[bin]]
 name = "ripdiff"
@@ -28,8 +25,8 @@ name = "rd"
 path = "src/main.rs"
 
 [dependencies]
-ansi-to-tui = "7"
 anyhow = "1"
+vendored_difftastic = { package = "difftastic", path = "vendor/difftastic" }
 bumpalo = "3.16.0"
 clap = { version = "4.0.0", features = ["cargo", "derive", "env", "string", "wrap_help"] }
 clap_lex = ">= 1.0.0, < 1.1.0"
