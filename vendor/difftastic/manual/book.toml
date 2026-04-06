@@ -1,0 +1,20 @@
+[book]
+authors = ["Wilfred Hughes"]
+language = "en"
+src = "src"
+title = "Difftastic Manual"
+description = "The manual for difftastic, the structural diff tool"
+
+[output.html]
+git-repository-url = "https://github.com/wilfred/difftastic"
+edit-url-template = "https://github.com/wilfred/difftastic/edit/master/manual/{path}"
+
+[output.html.redirect]
+"/getting_started.html" = "./installation.html"
+"/upstream_parsers.html" = "/languages_supported.html"
+
+[output.html.playground]
+copyable = false
+
+[preprocessor.replace-version-placeholder]
+command = "./replace_version_placeholder.sh"

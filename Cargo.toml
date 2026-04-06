@@ -13,7 +13,7 @@ documentation = "https://docs.rs/ripdiff"
 readme = "README.md"
 keywords = ["git", "diff", "tui", "review", "agent"]
 categories = ["command-line-utilities", "development-tools"]
-include = ["build.rs", "src/**", "vendor/difftastic/**", "Cargo.toml", "README.md", "LICENSE"]
+include = ["build.rs", "src/**", "vendor/VENDORED.md", ".gitmodules", "Cargo.toml", "README.md", "LICENSE"]
 
 [lib]
 name = "difftastic"
