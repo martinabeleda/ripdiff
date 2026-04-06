@@ -1,13 +1,16 @@
 use crate::event::Event;
 use crate::git::repo_has_head;
 use anyhow::{Context, Result};
-use difftastic::{render_diff_from_paths, RenderDisplayMode, RenderOptions};
-use ratatui::text::{Line, Text};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tempfile::TempDir;
 use tokio::sync::mpsc;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use vendored_difftastic::{
+    ChangeSpan, DiffRequest as SemanticDiffRequest, DiffStatus, SemanticLine,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DiffMode {
@@ -74,8 +77,6 @@ impl DiffService {
     }
 }
 
-/// Fetch diff for a single file using difftastic as GIT_EXTERNAL_DIFF.
-/// For untracked files, shows full file content as new.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn fetch_diff(
     repo_root: &Path,
@@ -100,22 +101,17 @@ pub fn fetch_diff_with_options(
     }
 
     let has_head = repo_has_head(repo_root)?;
-    let output_bytes = render_tracked_diff(
+    render_tracked_diff(
         repo_root,
         file_path,
         panel_width,
         mode,
         has_head,
         show_unstaged_only,
-    )?;
-
-    parse_ansi_to_lines(&output_bytes)
+    )
 }
 
 fn show_new_file(repo_root: &Path, file_path: &str) -> Result<DiffContent> {
-    use ratatui::style::{Color, Style};
-    use ratatui::text::Span;
-
     let full_path = repo_root.join(file_path);
     let content = std::fs::read_to_string(&full_path).unwrap_or_else(|_| "[binary file]".into());
 
@@ -124,7 +120,7 @@ fn show_new_file(repo_root: &Path, file_path: &str) -> Result<DiffContent> {
             format!("new file: {file_path}"),
             Style::default()
                 .fg(Color::Green)
-                .add_modifier(ratatui::style::Modifier::BOLD),
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
@@ -149,8 +145,8 @@ fn render_tracked_diff(
     mode: &DiffMode,
     has_head: bool,
     show_unstaged_only: bool,
-) -> Result<Vec<u8>> {
-    let mut output = Vec::new();
+) -> Result<DiffContent> {
+    let mut lines = Vec::new();
     let diff_specs = if show_unstaged_only {
         vec![DiffSpec::IndexToWorktree]
     } else if has_head {
@@ -164,13 +160,14 @@ fn render_tracked_diff(
         if chunk.is_empty() {
             continue;
         }
-        if !output.is_empty() && !output.ends_with(b"\n") {
-            output.push(b'\n');
+
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
         }
-        output.extend(chunk);
+        lines.extend(chunk);
     }
 
-    Ok(output)
+    Ok(DiffContent { lines })
 }
 
 #[derive(Clone, Copy)]
@@ -180,13 +177,23 @@ enum DiffSpec {
     IndexToWorktree,
 }
 
+impl DiffSpec {
+    fn label(self) -> &'static str {
+        match self {
+            DiffSpec::HeadToWorktree => "HEAD ↔ worktree",
+            DiffSpec::EmptyToIndex => "(empty) ↔ index",
+            DiffSpec::IndexToWorktree => "index ↔ worktree",
+        }
+    }
+}
+
 fn render_diff_spec(
     repo_root: &Path,
     file_path: &str,
     panel_width: u16,
     mode: &DiffMode,
     spec: DiffSpec,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<Line<'static>>> {
     let (lhs, rhs) = match spec {
         DiffSpec::HeadToWorktree => (
             git_revision_bytes(repo_root, "HEAD", file_path)?,
@@ -203,24 +210,288 @@ fn render_diff_spec(
         return Ok(Vec::new());
     }
 
-    let scratch = TempDir::new().context("Failed to create scratch directory for difftastic")?;
-    let lhs_path = write_snapshot(&scratch, "lhs", file_path, lhs.as_deref())?;
-    let rhs_path = write_snapshot(&scratch, "rhs", file_path, rhs.as_deref())?;
+    let lhs_bytes = lhs.as_deref().unwrap_or(&[]);
+    let rhs_bytes = rhs.as_deref().unwrap_or(&[]);
+    let semantic = vendored_difftastic::diff_bytes_semantic(SemanticDiffRequest {
+        display_path: file_path,
+        lhs_path: lhs.as_ref().map(|_| Path::new(file_path)),
+        rhs_path: rhs.as_ref().map(|_| Path::new(file_path)),
+        lhs_bytes,
+        rhs_bytes,
+    })
+    .context("Failed to render semantic diff")?;
 
-    let rendered = render_diff_from_paths(
-        file_path,
-        lhs_path.as_deref(),
-        rhs_path.as_deref(),
-        RenderOptions {
-            display_mode: match mode {
-                DiffMode::Inline => RenderDisplayMode::Inline,
-                DiffMode::SideBySide => RenderDisplayMode::SideBySide,
-            },
-            terminal_width: usize::from(panel_width),
-        },
-    );
+    let lhs_text = String::from_utf8_lossy(lhs_bytes);
+    let rhs_text = String::from_utf8_lossy(rhs_bytes);
+    let lhs_lines: Vec<&str> = lhs_text.lines().collect();
+    let rhs_lines: Vec<&str> = rhs_text.lines().collect();
 
-    Ok(rendered.into_bytes())
+    let mut rendered = vec![Line::from(Span::styled(
+        format!("{file_path} ({})", spec.label()),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ))];
+
+    if semantic.status == DiffStatus::Binary {
+        rendered.push(Line::from(Span::styled(
+            "[binary diff]",
+            Style::default().fg(Color::Yellow),
+        )));
+        return Ok(rendered);
+    }
+
+    if semantic.status == DiffStatus::Created {
+        for (i, text) in rhs_lines.iter().enumerate() {
+            rendered.push(render_single_side_line(
+                '+',
+                i as u32,
+                text,
+                Color::Green,
+                &[],
+            ));
+        }
+        return Ok(rendered);
+    }
+
+    if semantic.status == DiffStatus::Deleted {
+        for (i, text) in lhs_lines.iter().enumerate() {
+            rendered.push(render_single_side_line(
+                '-',
+                i as u32,
+                text,
+                Color::Red,
+                &[],
+            ));
+        }
+        return Ok(rendered);
+    }
+
+    for chunk in semantic.chunks {
+        for line in chunk.lines {
+            rendered.extend(render_semantic_line(
+                &line,
+                &lhs_lines,
+                &rhs_lines,
+                panel_width,
+                mode,
+            ));
+        }
+    }
+
+    if rendered.len() == 1 {
+        rendered.push(Line::from("[no visible changes]"));
+    }
+
+    Ok(rendered)
+}
+
+fn render_semantic_line(
+    line: &SemanticLine,
+    lhs_lines: &[&str],
+    rhs_lines: &[&str],
+    panel_width: u16,
+    mode: &DiffMode,
+) -> Vec<Line<'static>> {
+    match mode {
+        DiffMode::Inline => {
+            let mut out = Vec::new();
+            if let Some(lhs_line) = line.lhs_line {
+                out.push(render_single_side_line(
+                    '-',
+                    lhs_line,
+                    line_at(lhs_lines, lhs_line),
+                    Color::Red,
+                    &line.lhs_changes,
+                ));
+            }
+            if let Some(rhs_line) = line.rhs_line {
+                out.push(render_single_side_line(
+                    '+',
+                    rhs_line,
+                    line_at(rhs_lines, rhs_line),
+                    Color::Green,
+                    &line.rhs_changes,
+                ));
+            }
+            out
+        }
+        DiffMode::SideBySide => vec![render_side_by_side_line(
+            line,
+            lhs_lines,
+            rhs_lines,
+            panel_width,
+        )],
+    }
+}
+
+fn render_single_side_line(
+    prefix: char,
+    line_num: u32,
+    text: &str,
+    color: Color,
+    changes: &[ChangeSpan],
+) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        format!("{prefix}{:>4} ", line_num.saturating_add(1)),
+        Style::default().fg(Color::DarkGray),
+    )];
+    spans.extend(styled_text_with_changes(text, color, changes));
+    Line::from(spans)
+}
+
+fn styled_text_with_changes(
+    text: &str,
+    base_color: Color,
+    changes: &[ChangeSpan],
+) -> Vec<Span<'static>> {
+    if changes.is_empty() {
+        return vec![Span::styled(
+            text.to_owned(),
+            Style::default().fg(base_color),
+        )];
+    }
+
+    let mut sorted = changes.to_vec();
+    sorted.sort_by_key(|change| change.start_col);
+
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+
+    for change in sorted {
+        let start = byte_index_for_display_col(text, change.start_col as usize);
+        let end = byte_index_for_display_col(text, change.end_col as usize).max(start);
+
+        if start > cursor {
+            spans.push(Span::styled(
+                text[cursor..start].to_owned(),
+                Style::default().fg(base_color),
+            ));
+        }
+
+        if end > start {
+            spans.push(Span::styled(
+                text[start..end].to_owned(),
+                Style::default()
+                    .fg(accent_color(base_color))
+                    .add_modifier(Modifier::BOLD),
+            ));
+            cursor = end;
+        }
+    }
+
+    if cursor < text.len() {
+        spans.push(Span::styled(
+            text[cursor..].to_owned(),
+            Style::default().fg(base_color),
+        ));
+    }
+
+    if spans.is_empty() {
+        vec![Span::styled(
+            text.to_owned(),
+            Style::default().fg(base_color),
+        )]
+    } else {
+        spans
+    }
+}
+
+fn accent_color(base: Color) -> Color {
+    match base {
+        Color::Red => Color::LightRed,
+        Color::Green => Color::LightGreen,
+        other => other,
+    }
+}
+
+fn byte_index_for_display_col(text: &str, target_col: usize) -> usize {
+    if target_col == 0 {
+        return 0;
+    }
+
+    let mut col = 0usize;
+    for (idx, ch) in text.char_indices() {
+        let width = ch.width().unwrap_or(0).max(1);
+        if col >= target_col {
+            return idx;
+        }
+        col += width;
+        if col >= target_col {
+            return idx + ch.len_utf8();
+        }
+    }
+    text.len()
+}
+
+fn render_side_by_side_line(
+    line: &SemanticLine,
+    lhs_lines: &[&str],
+    rhs_lines: &[&str],
+    panel_width: u16,
+) -> Line<'static> {
+    let total_width = usize::from(panel_width).max(40);
+    let separator = " │ ";
+    let side_width = total_width.saturating_sub(separator.len()) / 2;
+
+    let lhs_text = line
+        .lhs_line
+        .map(|n| format!("-{:>4} {}", n.saturating_add(1), line_at(lhs_lines, n)))
+        .unwrap_or_default();
+    let rhs_text = line
+        .rhs_line
+        .map(|n| format!("+{:>4} {}", n.saturating_add(1), line_at(rhs_lines, n)))
+        .unwrap_or_default();
+
+    let lhs = pad_to_width(&truncate_to_width(&lhs_text, side_width), side_width);
+    let rhs = pad_to_width(&truncate_to_width(&rhs_text, side_width), side_width);
+
+    Line::from(vec![
+        Span::styled(lhs, Style::default().fg(Color::Red)),
+        Span::styled(separator, Style::default().fg(Color::DarkGray)),
+        Span::styled(rhs, Style::default().fg(Color::Green)),
+    ])
+}
+
+fn truncate_to_width(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if text.width() <= width {
+        return text.to_owned();
+    }
+
+    let mut out = String::new();
+    let mut used = 0usize;
+    let budget = width.saturating_sub(1);
+
+    for ch in text.chars() {
+        let ch_width = ch.width().unwrap_or(0).max(1);
+        if used + ch_width > budget {
+            break;
+        }
+        out.push(ch);
+        used += ch_width;
+    }
+
+    out.push('…');
+    out
+}
+
+fn pad_to_width(text: &str, width: usize) -> String {
+    let current = text.width();
+    if current >= width {
+        return text.to_owned();
+    }
+
+    let mut out = String::with_capacity(text.len() + (width - current));
+    out.push_str(text);
+    out.push_str(&" ".repeat(width - current));
+    out
+}
+
+fn line_at<'a>(lines: &'a [&str], line_num: u32) -> &'a str {
+    lines.get(line_num as usize).copied().unwrap_or("")
 }
 
 fn git_revision_bytes(
@@ -256,47 +527,6 @@ fn worktree_bytes(repo_root: &Path, file_path: &str) -> Result<Option<Vec<u8>>> 
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).context("Failed to read worktree file"),
     }
-}
-
-fn write_snapshot(
-    scratch: &TempDir,
-    side: &str,
-    display_path: &str,
-    bytes: Option<&[u8]>,
-) -> Result<Option<PathBuf>> {
-    let Some(bytes) = bytes else {
-        return Ok(None);
-    };
-
-    let file_name = Path::new(display_path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("file");
-    let path = scratch.path().join(format!("{side}-{file_name}"));
-    fs::write(&path, bytes).with_context(|| format!("Failed to write {side} snapshot"))?;
-    Ok(Some(path))
-}
-
-fn parse_ansi_to_lines(bytes: &[u8]) -> Result<DiffContent> {
-    use ansi_to_tui::IntoText;
-
-    let text: Text = bytes.into_text().context("Failed to parse ANSI output")?;
-
-    let lines: Vec<Line<'static>> = text
-        .lines
-        .into_iter()
-        .map(|line| {
-            let spans: Vec<ratatui::text::Span<'static>> = line
-                .spans
-                .into_iter()
-                .map(|span| ratatui::text::Span::styled(span.content.into_owned(), span.style))
-                .collect();
-            Line::from(spans)
-        })
-        .collect();
-
-    Ok(DiffContent { lines })
 }
 
 #[cfg(test)]
